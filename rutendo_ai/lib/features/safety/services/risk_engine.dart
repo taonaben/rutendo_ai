@@ -81,8 +81,11 @@ class RiskEngine {
       );
     }
 
-    final severity = _severityFor(score);
+    var severity = _severityFor(score);
     if (isVehicle && distance != EstimatedDistance.far) {
+      if (severity.index < HazardSeverity.high.index) {
+        severity = HazardSeverity.high;
+      }
       reason = 'Vehicle detected close enough to need a strong warning';
     } else if (zone == DetectionZone.center &&
         distance == EstimatedDistance.near) {
