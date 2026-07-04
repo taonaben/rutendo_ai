@@ -10,16 +10,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ultralytics import YOLO
 
-from src.config import YOLO_MODEL, YOLO_CONFIDENCE, RELEVANT_CLASSES
+from src.config import YOLO_MODEL, YOLO_CONFIDENCE, RELEVANT_LABELS
 
-
-COCO_NAMES = {
-    0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus",
-    6: "train", 7: "truck", 9: "traffic light", 11: "stop sign",
-    15: "cat", 16: "dog", 56: "chair", 67: "cell phone",
-}
 
 det_counter = 0
+
+
+def class_name(model, cls_id):
+    names = getattr(model, "names", {})
+    if isinstance(names, dict):
+        return names.get(cls_id, f"class_{cls_id}")
+    if isinstance(names, list) and 0 <= cls_id < len(names):
+        return names[cls_id]
+    return f"class_{cls_id}"
 
 
 def process_frame(model, frame, frame_idx, fps):
@@ -31,7 +34,8 @@ def process_frame(model, frame, frame_idx, fps):
 
     for box in results.boxes:
         cls_id = int(box.cls[0])
-        if cls_id not in RELEVANT_CLASSES:
+        label = class_name(model, cls_id)
+        if label not in RELEVANT_LABELS:
             continue
 
         det_counter += 1
@@ -39,7 +43,7 @@ def process_frame(model, frame, frame_idx, fps):
 
         detections.append({
             "id": f"det_{det_counter:04d}",
-            "label": COCO_NAMES.get(cls_id, f"class_{cls_id}"),
+            "label": label,
             "confidence": round(float(box.conf[0]), 2),
             "box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
             "frame": {"width": w, "height": h, "timestampMs": timestamp_ms},

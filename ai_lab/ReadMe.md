@@ -45,6 +45,44 @@ Show annotated video:
 python src/prototype_detection.py -i videos/test.mp4 --step 3 --show
 ```
 
+## Fine-tune with the Roboflow pedestrian obstacle dataset
+
+The Roboflow export in `datasets/Pedestrian Obstacle Detection.v6-for-validation.yolov11`
+contains YOLO labels for:
+
+`animal`, `barrier`, `bike`, `crosswalk`, `hazard-sign`, `person`, `pole`, `stairs`, `stall`, `vehicle`
+
+The current download is a validation-only export, so first create deterministic
+train/validation/test split files from the labeled images:
+
+```bash
+python training/prepare_roboflow_split.py
+```
+
+Fine-tune YOLO11n:
+
+```bash
+python training/train_yolo11_roboflow.py --model yolo11n.pt --epochs 75 --imgsz 640
+```
+
+For an interactive notebook workflow, use:
+
+```text
+notebooks/train_yolo11_roboflow.ipynb
+```
+
+The best checkpoint will be saved under:
+
+```text
+training/runs/yolo11n_roboflow_obstacles/weights/best.pt
+```
+
+Run detection with the fine-tuned model:
+
+```bash
+python src/prototype_detection.py -i videos/test.mp4 --model training/runs/yolo11n_roboflow_obstacles/weights/best.pt
+```
+
 ## CLI Args
 
 | Arg | Default | Description |

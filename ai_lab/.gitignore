@@ -1,0 +1,7 @@
+datasets/
+training/runs/
+training/roboflow_pedestrian_obstacles_split/
+.codex
+.venv
+.agents
+runs/
