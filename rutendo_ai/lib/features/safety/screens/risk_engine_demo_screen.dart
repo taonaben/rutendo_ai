@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/cue_decision.dart';
 import '../models/detection_result.dart';
 import '../models/hazard.dart';
+import '../services/onnx_inference_service.dart';
 import '../services/risk_engine.dart';
 
 class RiskEngineDemoScreen extends StatefulWidget {
@@ -15,16 +16,56 @@ class RiskEngineDemoScreen extends StatefulWidget {
 class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   static const _riskEngine = RiskEngine();
 
+  final _onnxService = OnnxInferenceService();
+
   late _DemoScenario _selectedScenario = _scenarios.first;
   late RiskAssessment _assessment = _riskEngine.assess(
     _selectedScenario.detections,
   );
+  String _modelStatus = 'Not loaded';
+  bool _isLoadingModel = false;
 
   void _selectScenario(_DemoScenario scenario) {
     setState(() {
       _selectedScenario = scenario;
       _assessment = _riskEngine.assess(scenario.detections);
     });
+  }
+
+  Future<void> _loadModel() async {
+    setState(() {
+      _isLoadingModel = true;
+      _modelStatus = 'Loading ONNX model...';
+    });
+
+    try {
+      await _onnxService.load();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _modelStatus = 'Loaded';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _modelStatus = 'Failed to load: $error';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingModel = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _onnxService.release();
+    super.dispose();
   }
 
   @override
@@ -53,11 +94,57 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
               ],
             ),
             const SizedBox(height: 24),
+            _ModelPanel(
+              service: _onnxService,
+              status: _modelStatus,
+              isLoading: _isLoadingModel,
+              onLoad: _loadModel,
+            ),
+            const SizedBox(height: 24),
             _ResultPanel(assessment: _assessment, hazard: hazard),
           ],
         ),
       ),
     );
+  }
+}
+
+class _ModelPanel extends StatelessWidget {
+  const _ModelPanel({
+    required this.service,
+    required this.status,
+    required this.isLoading,
+    required this.onLoad,
+  });
+
+  final OnnxInferenceService service;
+  final String status;
+  final bool isLoading;
+  final VoidCallback onLoad;
+
+  @override
+  Widget build(BuildContext context) {
+    return _InfoGroup(
+      title: 'ONNX Model',
+      action: FilledButton(
+        onPressed: isLoading ? null : onLoad,
+        child: Text(isLoading ? 'Loading...' : 'Load model'),
+      ),
+      rows: [
+        _InfoRow(label: 'Status', value: status),
+        _InfoRow(label: 'Model', value: OnnxModelAssets.modelPath),
+        _InfoRow(label: 'Labels', value: _formatList(service.labels)),
+        _InfoRow(label: 'Inputs', value: _formatList(service.inputNames)),
+        _InfoRow(label: 'Outputs', value: _formatList(service.outputNames)),
+      ],
+    );
+  }
+
+  String _formatList(List<String> values) {
+    if (values.isEmpty) {
+      return 'Not available yet';
+    }
+    return values.join(', ');
   }
 }
 
@@ -108,10 +195,11 @@ class _ResultPanel extends StatelessWidget {
 }
 
 class _InfoGroup extends StatelessWidget {
-  const _InfoGroup({required this.title, required this.rows});
+  const _InfoGroup({required this.title, required this.rows, this.action});
 
   final String title;
   final List<_InfoRow> rows;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -125,7 +213,17 @@ class _InfoGroup extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleLarge),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                if (action != null) action!,
+              ],
+            ),
             const SizedBox(height: 12),
             for (final row in rows) ...[
               row,
