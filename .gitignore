@@ -7,10 +7,8 @@ __pycache__/
 # Model weights (too large for git, downloaded or trained)
 *.pt
 *.pth
-*.onnx
 *.tflite
 ai_lab/models/
-ai_lab/exports/
 
 # Data
 ai_lab/datasets/

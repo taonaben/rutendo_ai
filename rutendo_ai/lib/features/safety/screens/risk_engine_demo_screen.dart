@@ -156,7 +156,8 @@ class _ResultPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (hazard == null) {
+    final h = hazard;
+    if (h == null) {
       return const _InfoGroup(
         title: 'Decision',
         rows: [
@@ -171,11 +172,11 @@ class _ResultPanel extends StatelessWidget {
     return _InfoGroup(
       title: 'Decision',
       rows: [
-        _InfoRow(label: 'Object', value: hazard.detection.label),
-        _InfoRow(label: 'Zone', value: hazard.zone.name),
-        _InfoRow(label: 'Distance', value: hazard.distance.name),
-        _InfoRow(label: 'Severity', value: hazard.severity.name),
-        _InfoRow(label: 'Reason', value: hazard.reason),
+        _InfoRow(label: 'Object', value: h.detection.label),
+        _InfoRow(label: 'Zone', value: h.zone.name),
+        _InfoRow(label: 'Distance', value: h.distance.name),
+        _InfoRow(label: 'Severity', value: h.severity.name),
+        _InfoRow(label: 'Reason', value: h.reason),
         _InfoRow(
           label: 'Audio',
           value:
