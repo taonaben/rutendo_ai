@@ -5,6 +5,7 @@ import '../models/detection_result.dart';
 import '../models/hazard.dart';
 import '../services/onnx_inference_service.dart';
 import '../services/risk_engine.dart';
+import '../widgets/camera_preview_panel.dart';
 
 class RiskEngineDemoScreen extends StatefulWidget {
   const RiskEngineDemoScreen({super.key});
@@ -94,6 +95,8 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
               ],
             ),
             const SizedBox(height: 24),
+            const CameraPreviewPanel(),
+            const SizedBox(height: 24),
             _ModelPanel(
               service: _onnxService,
               status: _modelStatus,
@@ -156,8 +159,9 @@ class _ResultPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final h = hazard;
-    if (h == null) {
+    final selectedHazard = hazard;
+
+    if (selectedHazard == null) {
       return const _InfoGroup(
         title: 'Decision',
         rows: [
@@ -172,11 +176,11 @@ class _ResultPanel extends StatelessWidget {
     return _InfoGroup(
       title: 'Decision',
       rows: [
-        _InfoRow(label: 'Object', value: h.detection.label),
-        _InfoRow(label: 'Zone', value: h.zone.name),
-        _InfoRow(label: 'Distance', value: h.distance.name),
-        _InfoRow(label: 'Severity', value: h.severity.name),
-        _InfoRow(label: 'Reason', value: h.reason),
+        _InfoRow(label: 'Object', value: selectedHazard.detection.label),
+        _InfoRow(label: 'Zone', value: selectedHazard.zone.name),
+        _InfoRow(label: 'Distance', value: selectedHazard.distance.name),
+        _InfoRow(label: 'Severity', value: selectedHazard.severity.name),
+        _InfoRow(label: 'Reason', value: selectedHazard.reason),
         _InfoRow(
           label: 'Audio',
           value:
