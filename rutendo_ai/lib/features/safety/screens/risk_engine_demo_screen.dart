@@ -5,6 +5,7 @@ import '../models/detection_result.dart';
 import '../models/hazard.dart';
 import '../services/onnx_inference_service.dart';
 import '../services/risk_engine.dart';
+import '../widgets/camera_preview_panel.dart';
 
 class RiskEngineDemoScreen extends StatefulWidget {
   const RiskEngineDemoScreen({super.key});
@@ -93,6 +94,8 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
                   ),
               ],
             ),
+            const SizedBox(height: 24),
+            const CameraPreviewPanel(),
             const SizedBox(height: 24),
             _ModelPanel(
               service: _onnxService,
