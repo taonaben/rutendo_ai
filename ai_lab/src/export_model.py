@@ -29,6 +29,8 @@ def main():
                         help="Export format (onnx recommended — Flutter onnxruntime_v2 supports GPU on mobile)")
     parser.add_argument("--int8", action="store_true",
                         help="INT8 quantization (tflite only, Linux/macOS, smaller/faster)")
+    parser.add_argument("--nms", action="store_true",
+                        help="Bake NMS into ONNX graph. Output becomes (1,max_det,6): xyxy+conf+cls_id.")
     args = parser.parse_args()
 
     model_path = args.model or YOLO_MODEL
@@ -47,6 +49,10 @@ def main():
     export_kwargs = {"format": args.format, "imgsz": args.imgsz}
     if args.format == "onnx":
         export_kwargs["opset"] = args.opset
+        if args.nms:
+            export_kwargs["nms"] = True
+            export_kwargs["conf"] = 0.25
+            export_kwargs["iou"] = 0.7
     if args.format == "tflite" and args.int8:
         export_kwargs["int8"] = True
 
@@ -67,7 +73,10 @@ def main():
     print(f"\nExported: {dest} ({size_mb:.1f} MB)")
     print(f"Labels:   {labels_path}")
     print(f"Input:    {args.imgsz}x{args.imgsz}x3  (1, 3, {args.imgsz}, {args.imgsz})")
-    print(f"Output:   detection boxes + scores + class indices")
+    if args.nms:
+        print(f"Output:   (1, 300, 6)  [x1,y1,x2,y2,conf,cls_id]  (NMS baked-in)")
+    else:
+        print(f"Output:   (1, {len(raw_labels)}, 8400)  [cx,cy,w,h,class_scores...]  (raw anchors)")
 
 
 if __name__ == "__main__":

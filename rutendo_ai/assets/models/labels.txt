@@ -1,10 +1,11 @@
-animal
-barrier
-bike
-crosswalk
-hazard-sign
 person
-pole
-stairs
-stall
-vehicle
+bicycle
+car
+motorcycle
+bus
+truck
+traffic light
+stop sign
+cat
+dog
+chair
