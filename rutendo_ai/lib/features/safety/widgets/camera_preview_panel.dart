@@ -25,12 +25,21 @@ class CameraPreviewPanel extends StatefulWidget {
 }
 
 class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
+  static const Duration _inferenceInterval = Duration(milliseconds: 120);
+
   CameraController? _controller;
   String _status = 'Starting camera...';
   bool _isProcessing = false;
   bool _workerBusy = false;
   List<DetectionResult> _detections = const [];
   Size? _sensorSize;
+  DateTime _lastInferenceAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  int _preprocessMs = 0;
+  int _inferenceMs = 0;
+  int _decodeMs = 0;
+  int _totalMs = 0;
+  int _lastFrameAcceptedAtMs = 0;
 
   Isolate? _workerIsolate;
   SendPort? _commandPort;
@@ -46,7 +55,9 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
 
   void _initWorker() {
     _workerResponsePort.listen(_onWorkerMessage);
-    Isolate.spawn(_workerEntry, _workerResponsePort.sendPort);
+    Isolate.spawn(_workerEntry, _workerResponsePort.sendPort).then((isolate) {
+      _workerIsolate = isolate;
+    });
   }
 
   void _onWorkerMessage(dynamic message) {
@@ -58,19 +69,40 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
       return;
     }
 
-    if (message is Float32List) {
+    if (message is Map<String, dynamic>) {
+      final tensorData = message['tensorData'];
+      final preprocessMs = message['preprocessMs'];
+      if (tensorData is! TransferableTypedData || preprocessMs is! int) {
+        _workerBusy = false;
+        _isProcessing = false;
+        return;
+      }
+
+      final tensorBytes = tensorData.materialize().asUint8List();
+      final floatData = Float32List.view(
+        tensorBytes.buffer,
+        tensorBytes.offsetInBytes,
+        tensorBytes.lengthInBytes ~/ Float32List.bytesPerElement,
+      );
+
       _workerBusy = false;
-      _runInference(message);
+      _runInference(floatData, preprocessMs: preprocessMs);
     }
   }
 
-  Future<void> _runInference(Float32List floatData) async {
+  Future<void> _runInference(
+    Float32List floatData, {
+    required int preprocessMs,
+  }) async {
+    final inferStart = DateTime.now();
     try {
       final outputs = await widget.onnxService.runRaw(
         inputName: 'images',
         input: floatData,
         inputShape: [1, 3, 640, 640],
       );
+      final inferElapsed = DateTime.now().difference(inferStart);
+      final decodeStart = DateTime.now();
 
       if (outputs.isNotEmpty && outputs[0] != null) {
         final raw = outputs[0]!.value;
@@ -81,10 +113,16 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
           labels: widget.onnxService.labels,
           confidenceThreshold: 0.35,
         );
+        final decodeElapsed = DateTime.now().difference(decodeStart);
 
         if (mounted) {
           setState(() {
             _detections = detections;
+            _preprocessMs = preprocessMs;
+            _inferenceMs = inferElapsed.inMilliseconds;
+            _decodeMs = decodeElapsed.inMilliseconds;
+            _totalMs =
+                DateTime.now().millisecondsSinceEpoch - _lastFrameAcceptedAtMs;
           });
           widget.onDetections(detections);
         }
@@ -137,8 +175,16 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
     if (!widget.onnxService.isLoaded) return;
     if (!_workerReady) return;
     if (_isProcessing || _workerBusy) return;
+
+    final now = DateTime.now();
+    if (now.difference(_lastInferenceAt) < _inferenceInterval) {
+      return;
+    }
+
     _isProcessing = true;
     _workerBusy = true;
+    _lastInferenceAt = now;
+    _lastFrameAcceptedAtMs = now.millisecondsSinceEpoch;
 
     if (_sensorSize == null && mounted) {
       final w = image.width.toDouble();
@@ -148,9 +194,9 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
       });
     }
 
-    final yBytes = Uint8List.fromList(image.planes[0].bytes);
-    final uBytes = Uint8List.fromList(image.planes[1].bytes);
-    final vBytes = Uint8List.fromList(image.planes[2].bytes);
+    final yBytes = TransferableTypedData.fromList([image.planes[0].bytes]);
+    final uBytes = TransferableTypedData.fromList([image.planes[1].bytes]);
+    final vBytes = TransferableTypedData.fromList([image.planes[2].bytes]);
     final yRowStride = image.planes[0].bytesPerRow;
     final uvRowStride = image.planes[1].bytesPerRow;
     final uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
@@ -159,14 +205,23 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
     final needsRotate = w > h;
 
     _commandPort?.send(<dynamic>[
-      w, h, yBytes, uBytes, vBytes,
-      yRowStride, uvRowStride, uvPixelStride, needsRotate,
+      w,
+      h,
+      yBytes,
+      uBytes,
+      vBytes,
+      yRowStride,
+      uvRowStride,
+      uvPixelStride,
+      needsRotate,
     ]);
   }
 
   void _setStatus(String status) {
     if (!mounted) return;
-    setState(() { _status = status; });
+    setState(() {
+      _status = status;
+    });
   }
 
   @override
@@ -190,35 +245,47 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
 
         return isReady
             ? Stack(
-                children: [
-                  ClipRect(
-                    child: FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(
-                        width: controller!.value.previewSize?.height ?? 720,
-                        height: controller.value.previewSize?.width ?? 1280,
-                        child: CameraPreview(controller),
+              children: [
+                ClipRect(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: controller!.value.previewSize?.height ?? 720,
+                      height: controller.value.previewSize?.width ?? 1280,
+                      child: CameraPreview(controller),
+                    ),
+                  ),
+                ),
+                if (_detections.isNotEmpty && _sensorSize != null)
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _BoundingBoxPainter(
+                        detections: _detections,
+                        sensorWidth: _sensorSize!.width,
+                        sensorHeight: _sensorSize!.height,
+                        areaWidth: areaWidth,
+                        areaHeight: areaHeight,
                       ),
                     ),
                   ),
-                  if (_detections.isNotEmpty && _sensorSize != null)
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _BoundingBoxPainter(
-                          detections: _detections,
-                          sensorWidth: _sensorSize!.width,
-                          sensorHeight: _sensorSize!.height,
-                          areaWidth: areaWidth,
-                          areaHeight: areaHeight,
-                        ),
-                      ),
-                    ),
-                ],
-              )
+                Positioned(
+                  left: 12,
+                  top: 12,
+                  child: _PerfOverlay(
+                    preprocessMs: _preprocessMs,
+                    inferenceMs: _inferenceMs,
+                    decodeMs: _decodeMs,
+                    totalMs: _totalMs,
+                  ),
+                ),
+              ],
+            )
             : Center(
-                child: Text(_status,
-                    style: const TextStyle(color: Colors.white54)),
-              );
+              child: Text(
+                _status,
+                style: const TextStyle(color: Colors.white54),
+              ),
+            );
       },
     );
   }
@@ -267,10 +334,11 @@ class _BoundingBoxPainter extends CustomPainter {
 
       final color = _colorForLabel(d.label);
 
-      final paint = Paint()
-        ..color = color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.0;
+      final paint =
+          Paint()
+            ..color = color
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 3.0;
       canvas.drawRect(Rect.fromLTWH(visX, visY, visW, visH), paint);
 
       final bgPaint = Paint()..color = color.withAlpha(200);
@@ -290,14 +358,20 @@ class _BoundingBoxPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_BoundingBoxPainter old) =>
-      old.detections != detections;
+  bool shouldRepaint(_BoundingBoxPainter old) => old.detections != detections;
 
   Color _colorForLabel(String label) {
     const colors = [
-      Colors.red, Colors.blue, Colors.green, Colors.orange,
-      Colors.purple, Colors.teal, Colors.pink, Colors.amber,
-      Colors.cyan, Colors.lime,
+      Colors.red,
+      Colors.blue,
+      Colors.green,
+      Colors.orange,
+      Colors.purple,
+      Colors.teal,
+      Colors.pink,
+      Colors.amber,
+      Colors.cyan,
+      Colors.lime,
     ];
     return colors[label.hashCode % colors.length];
   }
@@ -313,8 +387,17 @@ void _workerEntry(SendPort mainSendPort) {
   receivePort.listen((message) {
     if (message is List<dynamic> && message.length >= 9) {
       try {
+        final start = DateTime.now();
         final floatData = _preprocessFromList(message);
-        mainSendPort.send(floatData);
+        final elapsed = DateTime.now().difference(start).inMilliseconds;
+        final tensorBytes = TransferableTypedData.fromList([
+          floatData.buffer.asUint8List(),
+        ]);
+
+        mainSendPort.send(<String, dynamic>{
+          'tensorData': tensorBytes,
+          'preprocessMs': elapsed,
+        });
       } catch (e) {
         // Silently drop errored frames
       }
@@ -323,12 +406,16 @@ void _workerEntry(SendPort mainSendPort) {
 }
 
 Float32List _preprocessFromList(List<dynamic> args) {
+  final yMat = (args[2] as TransferableTypedData).materialize().asUint8List();
+  final uMat = (args[3] as TransferableTypedData).materialize().asUint8List();
+  final vMat = (args[4] as TransferableTypedData).materialize().asUint8List();
+
   return _preprocessFrame(
     width: args[0] as int,
     height: args[1] as int,
-    yBytes: args[2] as Uint8List,
-    uBytes: args[3] as Uint8List,
-    vBytes: args[4] as Uint8List,
+    yBytes: yMat,
+    uBytes: uMat,
+    vBytes: vMat,
     yRowStride: args[5] as int,
     uvRowStride: args[6] as int,
     uvPixelStride: args[7] as int,
@@ -359,7 +446,8 @@ Float32List _preprocessFrame({
       final v = vBytes[uvIdx] & 0xff;
 
       final r = (yVal + 1.402 * (v - 128)).clamp(0, 255).toInt();
-      final g = (yVal - 0.344 * (u - 128) - 0.714 * (v - 128)).clamp(0, 255).toInt();
+      final g =
+          (yVal - 0.344 * (u - 128) - 0.714 * (v - 128)).clamp(0, 255).toInt();
       final b = (yVal + 1.772 * (u - 128)).clamp(0, 255).toInt();
 
       final dstIdx = (y * width + x) * 4;
@@ -391,4 +479,47 @@ Float32List _preprocessFrame({
   }
 
   return floatData;
+}
+
+class _PerfOverlay extends StatelessWidget {
+  const _PerfOverlay({
+    required this.preprocessMs,
+    required this.inferenceMs,
+    required this.decodeMs,
+    required this.totalMs,
+  });
+
+  final int preprocessMs;
+  final int inferenceMs;
+  final int decodeMs;
+  final int totalMs;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withAlpha(170),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: DefaultTextStyle(
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontFamily: 'monospace',
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Realtime metrics'),
+            Text('pre: ${preprocessMs}ms'),
+            Text('infer: ${inferenceMs}ms'),
+            Text('decode: ${decodeMs}ms'),
+            Text('total: ${totalMs}ms'),
+          ],
+        ),
+      ),
+    );
+  }
 }

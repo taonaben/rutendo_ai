@@ -16,6 +16,7 @@ class RiskEngineDemoScreen extends StatefulWidget {
 
 class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   static const _riskEngine = RiskEngine();
+  static const Duration _logInterval = Duration(milliseconds: 500);
 
   final _onnxService = OnnxInferenceService();
   final List<String> _detectionLog = [];
@@ -23,6 +24,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   RiskAssessment _assessment = _riskEngine.assess(const []);
   int _lastInferenceMs = 0;
   int _detectionCounter = 0;
+  DateTime _lastLogAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
@@ -32,22 +34,32 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
   void _onLiveDetections(List<DetectionResult> detections) {
     if (!mounted) return;
+    final now = DateTime.now();
+    final shouldAppendLogs = now.difference(_lastLogAt) >= _logInterval;
+
     setState(() {
       _liveDetections = detections;
       _assessment = _riskEngine.assess(detections);
-      for (final d in detections) {
-        _detectionCounter++;
-        final x1 = (d.left * 640).round();
-        final y1 = (d.top * 640).round();
-        final x2 = (d.right * 640).round();
-        final y2 = (d.bottom * 640).round();
-        _detectionLog.insert(0,
+
+      if (shouldAppendLogs) {
+        _lastLogAt = now;
+        for (final d in detections) {
+          _detectionCounter++;
+          final x1 = (d.left * 640).round();
+          final y1 = (d.top * 640).round();
+          final x2 = (d.right * 640).round();
+          final y2 = (d.bottom * 640).round();
+          _detectionLog.insert(
+            0,
             '{"id":"det_${_detectionCounter.toString().padLeft(5, '0')}",'
             '"label":"${d.label}",'
             '"confidence":${d.confidence.toStringAsFixed(2)},'
             '"box":{"x1":$x1,"y1":$y1,"x2":$x2,"y2":$y2},'
-            '"frame":{"width":640,"height":640}}');
+            '"frame":{"width":640,"height":640}}',
+          );
+        }
       }
+
       while (_detectionLog.length > 50) _detectionLog.removeLast();
     });
   }
@@ -87,50 +99,58 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
                             ? 'Model: YOLO11n (pruned, 11 classes)'
                             : 'Model: loading...',
                         style: const TextStyle(
-                            color: Colors.green, fontSize: 12),
+                          color: Colors.green,
+                          fontSize: 12,
+                        ),
                       ),
                       Text(
                         '${_liveDetections.length} obj(s)',
                         style: const TextStyle(
-                            color: Colors.white70, fontSize: 12),
+                          color: Colors.white70,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   ),
                   if (_liveDetections.isNotEmpty) ...[
                     const SizedBox(height: 6),
                     Text(
-                      _liveDetections.take(5).map(
-                        (d) => '${d.label} ${(d.confidence * 100).round()}%',
-                      ).join('  |  '),
-                      style: const TextStyle(
-                          color: Colors.amber, fontSize: 13),
+                      _liveDetections
+                          .take(5)
+                          .map(
+                            (d) =>
+                                '${d.label} ${(d.confidence * 100).round()}%',
+                          )
+                          .join('  |  '),
+                      style: const TextStyle(color: Colors.amber, fontSize: 13),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
                   const Divider(color: Colors.white24, height: 16),
                   Expanded(
-                    child: _detectionLog.isEmpty
-                        ? const Text(
-                            'No detections yet',
-                            style: TextStyle(color: Colors.white38),
-                          )
-                        : ListView.builder(
-                            itemCount: _detectionLog.length,
-                            itemBuilder: (context, index) {
-                              return Padding(
-                                padding:
-                                    const EdgeInsets.only(bottom: 4),
-                                child: Text(
-                                  _detectionLog[index],
-                                  style: const TextStyle(
+                    child:
+                        _detectionLog.isEmpty
+                            ? const Text(
+                              'No detections yet',
+                              style: TextStyle(color: Colors.white38),
+                            )
+                            : ListView.builder(
+                              itemCount: _detectionLog.length,
+                              itemBuilder: (context, index) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: Text(
+                                    _detectionLog[index],
+                                    style: const TextStyle(
                                       color: Colors.amber,
                                       fontSize: 13,
-                                      fontFamily: 'monospace'),
-                                ),
-                              );
-                            },
-                          ),
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
                   ),
                 ],
               ),
