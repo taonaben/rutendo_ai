@@ -22,6 +22,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   List<DetectionResult> _liveDetections = const [];
   RiskAssessment _assessment = _riskEngine.assess(const []);
   int _lastInferenceMs = 0;
+  int _detectionCounter = 0;
 
   @override
   void initState() {
@@ -34,17 +35,20 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
     setState(() {
       _liveDetections = detections;
       _assessment = _riskEngine.assess(detections);
-      if (detections.isNotEmpty) {
-        final summary = detections.take(3).map(
-          (d) => '${d.label} ${(d.confidence * 100).round()}%',
-        ).join(', ');
+      for (final d in detections) {
+        _detectionCounter++;
+        final x1 = (d.left * 640).round();
+        final y1 = (d.top * 640).round();
+        final x2 = (d.right * 640).round();
+        final y2 = (d.bottom * 640).round();
         _detectionLog.insert(0,
-            '${DateTime.now().hour.toString().padLeft(2, '0')}:'
-            '${DateTime.now().minute.toString().padLeft(2, '0')}:'
-            '${DateTime.now().second.toString().padLeft(2, '0')}  '
-            '$summary');
-        if (_detectionLog.length > 30) _detectionLog.removeLast();
+            '{"id":"det_${_detectionCounter.toString().padLeft(5, '0')}",'
+            '"label":"${d.label}",'
+            '"confidence":${d.confidence.toStringAsFixed(2)},'
+            '"box":{"x1":$x1,"y1":$y1,"x2":$x2,"y2":$y2},'
+            '"frame":{"width":640,"height":640}}');
       }
+      while (_detectionLog.length > 50) _detectionLog.removeLast();
     });
   }
 
