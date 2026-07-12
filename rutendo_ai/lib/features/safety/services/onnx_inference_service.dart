@@ -48,7 +48,12 @@ class OnnxInferenceService {
             .toList(growable: false);
 
     final modelBytes = await rootBundle.load(modelPath);
-    _sessionOptions = OrtSessionOptions();
+
+    _sessionOptions = OrtSessionOptions()
+      ..setIntraOpNumThreads(4)
+      ..setSessionGraphOptimizationLevel(GraphOptimizationLevel.ortEnableAll)
+      ..appendXnnpackProvider();
+
     _session = OrtSession.fromBuffer(
       modelBytes.buffer.asUint8List(),
       _sessionOptions!,
@@ -91,5 +96,10 @@ class OnnxInferenceService {
     _sessionOptions?.release();
     _sessionOptions = null;
     OrtEnv.instance.release();
+  }
+
+  void _log(String message) {
+    // ignore: avoid_print
+    print('[OnnxInferenceService] $message');
   }
 }
