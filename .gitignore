@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Model weights (too large for git, downloaded or trained)
+*.pt
+*.pth
+*.tflite
+ai_lab/models/
+
+# Data
+ai_lab/datasets/
+ai_lab/videos/
+ai_lab/test_outputs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
