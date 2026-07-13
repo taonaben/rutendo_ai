@@ -10,6 +10,12 @@ class Hazard {
     required this.severity,
     required this.score,
     required this.reason,
+    this.trackId,
+    this.estimatedDistanceMeters,
+    this.timeToCollisionSeconds,
+    this.ttcOverrideApplied = false,
+    this.suppressedByStationaryUser = false,
+    this.scoreBreakdown = const {},
   });
 
   final DetectionResult detection;
@@ -18,6 +24,12 @@ class Hazard {
   final HazardSeverity severity;
   final double score;
   final String reason;
+  final int? trackId;
+  final double? estimatedDistanceMeters;
+  final double? timeToCollisionSeconds;
+  final bool ttcOverrideApplied;
+  final bool suppressedByStationaryUser;
+  final Map<String, double> scoreBreakdown;
 
   bool get shouldAlert => severity != HazardSeverity.ignore;
 }
