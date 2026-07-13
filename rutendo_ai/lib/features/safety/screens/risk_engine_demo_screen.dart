@@ -55,7 +55,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Risk Engine Demo')),
+      appBar: AppBar(title: const Text('Rutendo AI Vision')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -95,8 +95,14 @@ class _ModelPanel extends StatelessWidget {
     return _InfoGroup(
       title: 'ONNX Model',
       action: FilledButton(
-        onPressed: isLoading ? null : onLoad,
-        child: Text(isLoading ? 'Loading...' : 'Load model'),
+        onPressed: isLoading || service.isLoaded ? null : onLoad,
+        child: Text(
+          service.isLoaded
+              ? 'Model loaded'
+              : isLoading
+                  ? 'Loading...'
+                  : 'Load model',
+        ),
       ),
       rows: [
         _InfoRow(label: 'Status', value: status),
@@ -124,10 +130,10 @@ class _LiveDetectionPanel extends StatelessWidget {
     return const _InfoGroup(
       title: 'Live Detection',
       rows: [
-        _InfoRow(label: 'Status', value: 'Not connected yet'),
+        _InfoRow(label: 'Status', value: 'Not active yet'),
         _InfoRow(
           label: 'Next step',
-          value: 'Send camera frames to ONNX and parse output0',
+          value: 'Connect the camera feed to the loaded model',
         ),
         _InfoRow(label: 'Risk engine', value: 'Ready for real detections'),
       ],
