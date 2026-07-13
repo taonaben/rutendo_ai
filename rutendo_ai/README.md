@@ -8,7 +8,7 @@ path, and the user receives directional audio and vibration feedback.
 
 ```text
 camera frame
-  -> TFLite object detection
+  -> ONNX object detection
   -> DetectionResult list
   -> Dart RiskEngine
   -> AudioCueDecision + HapticCueDecision
@@ -27,8 +27,8 @@ The work can be split into clear ownership areas:
 
 | Area | Main files | Responsibility |
 | --- | --- | --- |
-| Camera | `camera_service.dart` | Reads camera frames and skips frames when inference is busy. |
-| Inference | `inference_service.dart` | Resizes frames, runs the TFLite model, and returns raw detections. |
+| Camera | `lib/features/safety/widgets/camera_preview_panel.dart` | Opens the back camera and shows a live preview. |
+| Inference | `lib/features/safety/services/onnx_inference_service.dart` | Loads the ONNX model and labels, then exposes raw model execution. |
 | Risk engine | `lib/features/safety/services/risk_engine.dart` | Scores detections, chooses the top hazards, and decides feedback urgency. |
 | Audio | `audio_cue_service.dart` | Plays left, center, and right beep patterns. |
 | Haptics | `haptic_service.dart` | Triggers vibration patterns for near or critical hazards. |
@@ -37,6 +37,46 @@ The work can be split into clear ownership areas:
 For the MVP, the risk engine is intentionally written in Dart because it is
 fast product logic, not model logic. It should stay readable and easy to tune
 after real walking tests.
+
+## Current Integration Status
+
+Complete:
+
+- The app opens on the phone.
+- The camera preview opens and displays the live back-camera feed.
+- The ONNX model loads from `assets/models/best.onnx`.
+- Labels load from `assets/models/labels.txt`.
+- The app can read the model input name `images` and output name `output0`.
+- The risk engine is implemented and tested with `DetectionResult` objects.
+
+Not complete yet:
+
+- Camera frames are not being sent into the ONNX model.
+- The app does not yet resize/normalize camera pixels into the model input
+  tensor.
+- The app does not yet decode `output0` into object boxes, labels, and
+  confidence scores.
+- Live camera detections are not yet passed into the `RiskEngine`.
+
+The missing bridge is:
+
+```text
+camera image
+  -> preprocess to model input tensor named images
+  -> run ONNX
+  -> parse output0
+  -> DetectionResult list
+  -> RiskEngine
+```
+
+To finish live detection safely, the inference/model owner needs to confirm the
+`output0` format:
+
+- output tensor shape
+- whether boxes are `xywh` or `xyxy`
+- whether coordinates are normalized or pixel values
+- where object confidence and class confidence are stored
+- whether non-max suppression is already included or must be done in Dart
 
 ## Risk Engine Rules
 
@@ -89,6 +129,8 @@ vibration strength and length.
 - `lib/features/safety/models/hazard.dart`
 - `lib/features/safety/models/cue_decision.dart`
 - `lib/features/safety/services/risk_engine.dart`
+- `lib/features/safety/services/onnx_inference_service.dart`
+- `lib/features/safety/widgets/camera_preview_panel.dart`
 - `test/risk_engine_test.dart`
 
 ## Testing
