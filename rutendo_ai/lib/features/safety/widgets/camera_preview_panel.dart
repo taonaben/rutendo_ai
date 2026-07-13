@@ -4,15 +4,14 @@ import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
+import 'package:tflite_flutter/tflite_flutter.dart';
 
 import '../models/detection_result.dart';
-import '../models/frame_metadata.dart';
 import '../models/motion_object.dart';
 import '../models/tracked_object.dart';
-import '../services/detection_parser.dart';
 import '../services/motion_estimator.dart';
 import '../services/onnx_inference_service.dart';
+import '../services/raw_yolo_decoder.dart';
 import '../services/tracker.dart';
 
 class CameraPreviewPanel extends StatefulWidget {
@@ -35,15 +34,11 @@ class CameraPreviewPanel extends StatefulWidget {
 
 class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
   static const Duration _inferenceInterval = Duration(milliseconds: 120);
-  static const int _modelInputSize = 640;
-
   static bool get _isWidgetTest {
     final binding = WidgetsBinding.instance;
-    return binding != null &&
-        binding.runtimeType.toString().contains('TestWidgetsFlutterBinding');
+    return binding.runtimeType.toString().contains('TestWidgetsFlutterBinding');
   }
 
-  final DetectionParser _detectionParser = const DetectionParser();
   final SimpleTracker _tracker = SimpleTracker();
   final MotionEstimator _motionEstimator = MotionEstimator();
 
@@ -65,6 +60,7 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
   SendPort? _commandPort;
   ReceivePort _workerResponsePort = ReceivePort();
   bool _workerReady = false;
+  bool _workerInitialized = false;
 
   @override
   void initState() {
@@ -81,102 +77,128 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
     _workerResponsePort.listen(_onWorkerMessage);
     Isolate.spawn(_workerEntry, _workerResponsePort.sendPort).then((isolate) {
       _workerIsolate = isolate;
+    }).catchError((e) {
+      debugPrint('[Camera] Worker spawn failed: $e');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() { _status = 'Worker spawn failed: $e'; });
+      });
     });
   }
 
   void _onWorkerMessage(dynamic message) {
     if (!mounted) return;
 
+    // Handshake: worker sends back its SendPort
     if (message is SendPort) {
       _commandPort = message;
       _workerReady = true;
+      _sendInitToWorker();
       return;
     }
 
-    if (message is Map<String, dynamic>) {
-      final tensorData = message['tensorData'];
-      final preprocessMs = message['preprocessMs'];
-      if (tensorData is! TransferableTypedData || preprocessMs is! int) {
+if (message is Map<String, dynamic>) {
+        // Worker ready confirmation
+        if (message['ready'] == true) {
+          _workerInitialized = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            setState(() { _status = 'Worker ready (TFLite)'; });
+          });
+          return;
+        }
+        // Worker error during init
+        if (message['error'] != null) {
+          debugPrint('[Camera] Worker init error: ${message['error']}');
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            setState(() { _status = 'Init error: ${message['error']}'; });
+          });
+          return;
+        }
+      // Detection results
+      if (message['type'] == 'result') {
         _workerBusy = false;
         _isProcessing = false;
+        _handleDetectionResult(message);
         return;
       }
-
-      final tensorBytes = tensorData.materialize().asUint8List();
-      final floatData = Float32List.view(
-        tensorBytes.buffer,
-        tensorBytes.offsetInBytes,
-        tensorBytes.lengthInBytes ~/ Float32List.bytesPerElement,
-      );
-
-      _workerBusy = false;
-      _runInference(floatData, preprocessMs: preprocessMs);
     }
+
+    // Unknown message – just reset flags
+    _workerBusy = false;
+    _isProcessing = false;
   }
 
-  Future<void> _runInference(
-    Float32List floatData, {
-    required int preprocessMs,
-  }) async {
-    final inferStart = DateTime.now();
-    try {
-      final outputs = await widget.onnxService.runRaw(
-        inputName: 'images',
-        input: floatData,
-        inputShape: [1, 3, 640, 640],
-      );
-      final inferElapsed = DateTime.now().difference(inferStart);
-      final decodeStart = DateTime.now();
-
-      if (outputs.isNotEmpty && outputs[0] != null) {
-        final raw = outputs[0]!.value;
-        if (raw == null) return;
-
-        final frameWidth = _sensorSize?.width.round() ?? _modelInputSize;
-        final frameHeight = _sensorSize?.height.round() ?? _modelInputSize;
-        final timestampMs = _lastFrameAcceptedAtMs;
-        final detections = _detectionParser.parseYolo(
-          rawOutput: raw,
-          labels: widget.onnxService.labels,
-          confidenceThreshold: 0.35,
-          metadata: FrameMetadata(
-            frameWidth: frameWidth,
-            frameHeight: frameHeight,
-            modelInputWidth: _modelInputSize,
-            modelInputHeight: _modelInputSize,
-            timestampMs: timestampMs,
-          ),
-        );
-        final trackedObjects = _tracker.update(
-          detections: detections,
-          timestampMs: timestampMs,
-        );
-        final motionObjects = _motionEstimator.update(
-          trackedObjects: trackedObjects,
-          frameHeightPx: frameHeight,
-          timestampMs: timestampMs,
-        );
-        final decodeElapsed = DateTime.now().difference(decodeStart);
-
-        if (mounted) {
-          setState(() {
-            _detections = detections;
-            _preprocessMs = preprocessMs;
-            _inferenceMs = inferElapsed.inMilliseconds;
-            _decodeMs = decodeElapsed.inMilliseconds;
-            _totalMs =
-                DateTime.now().millisecondsSinceEpoch - _lastFrameAcceptedAtMs;
-          });
-          widget.onDetections(detections);
-          widget.onTrackedObjects?.call(trackedObjects);
-          widget.onMotionObjects?.call(motionObjects);
-        }
-      }
-    } catch (e) {
-      debugPrint('[Camera] Error: $e');
-    } finally {
-      _isProcessing = false;
+  void _sendInitToWorker() {
+    if (!_workerReady || _workerInitialized) return;
+    if (!widget.onnxService.isLoaded) {
+      // Model not loaded yet – retry after a short delay
+      Future.delayed(const Duration(milliseconds: 50), _sendInitToWorker);
+      return;
     }
+
+    final modelBytes = widget.onnxService.modelBytes;
+    if (modelBytes == null) return;
+
+    _commandPort?.send(<String, dynamic>{
+      'init': true,
+      'modelBytes': modelBytes,
+      'labels': widget.onnxService.labels,
+    });
+  }
+
+  void _handleDetectionResult(Map<String, dynamic> message) {
+    final rawDetections = message['detections'] as List<dynamic>?;
+    if (rawDetections == null) return;
+
+    final frameWidth = message['frameWidth'] as int;
+    final frameHeight = message['frameHeight'] as int;
+    if (_sensorSize == null || _sensorSize!.width != frameWidth || _sensorSize!.height != frameHeight) {
+      _sensorSize = Size(frameWidth.toDouble(), frameHeight.toDouble());
+    }
+    final timestampMs = _lastFrameAcceptedAtMs;
+
+    final detections = rawDetections.map((d) {
+      final m = d as Map<String, dynamic>;
+      return DetectionResult(
+        label: m['label'] as String,
+        confidence: (m['confidence'] as num).toDouble(),
+        left: (m['left'] as num).toDouble(),
+        top: (m['top'] as num).toDouble(),
+        right: (m['right'] as num).toDouble(),
+        bottom: (m['bottom'] as num).toDouble(),
+      );
+    }).toList();
+
+
+    final trackedObjects = _tracker.update(
+      detections: detections,
+      timestampMs: timestampMs,
+    );
+    final motionObjects = _motionEstimator.update(
+      trackedObjects: trackedObjects,
+      frameHeightPx: frameHeight,
+      timestampMs: timestampMs,
+    );
+
+    if (!mounted) return;
+    widget.onDetections(detections);
+    widget.onTrackedObjects?.call(trackedObjects);
+    widget.onMotionObjects?.call(motionObjects);
+
+    // Defer setState to avoid layout assertion from camera stream timing
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _detections = detections;
+        _preprocessMs = message['preprocessMs'] as int? ?? 0;
+        _inferenceMs = message['inferenceMs'] as int? ?? 0;
+        _decodeMs = message['decodeMs'] as int? ?? 0;
+        _totalMs =
+            DateTime.now().millisecondsSinceEpoch - _lastFrameAcceptedAtMs;
+      });
+    });
   }
 
   Future<void> _startCamera() async {
@@ -204,6 +226,13 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
 
       if (!mounted) return;
 
+      // Set sensor size from preview size eagerly (avoids setState during camera stream)
+      final ps = controller.value.previewSize;
+      if (ps != null) {
+        _sensorSize =
+            ps.width > ps.height ? Size(ps.height, ps.width) : Size(ps.width, ps.height);
+      }
+
       await controller.startImageStream(_onImage);
 
       setState(() {
@@ -218,7 +247,7 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
 
   void _onImage(CameraImage image) {
     if (!widget.onnxService.isLoaded) return;
-    if (!_workerReady) return;
+    if (!_workerReady || !_workerInitialized) return;
     if (_isProcessing || _workerBusy) return;
 
     final now = DateTime.now();
@@ -230,14 +259,6 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
     _workerBusy = true;
     _lastInferenceAt = now;
     _lastFrameAcceptedAtMs = now.millisecondsSinceEpoch;
-
-    if (_sensorSize == null && mounted) {
-      final w = image.width.toDouble();
-      final h = image.height.toDouble();
-      setState(() {
-        _sensorSize = w > h ? Size(h, w) : Size(w, h);
-      });
-    }
 
     final yBytes = TransferableTypedData.fromList([image.planes[0].bytes]);
     final uBytes = TransferableTypedData.fromList([image.planes[1].bytes]);
@@ -424,53 +445,121 @@ class _BoundingBoxPainter extends CustomPainter {
   }
 }
 
-// ---- Long-lived background worker ----
+// ---- Long-lived background worker (TFLite) ----
 
 @pragma('vm:entry-point')
 void _workerEntry(SendPort mainSendPort) {
   final receivePort = ReceivePort();
   mainSendPort.send(receivePort.sendPort);
 
-  receivePort.listen((message) {
+  Interpreter? interpreter;
+  List<String> labels = const [];
+  Float32List? inputBuffer;
+  Float32List? outputBuffer;
+  bool initialized = false;
+
+  receivePort.listen((message) async {
+    // Init message
+    if (!initialized && message is Map<String, dynamic> && message['init'] == true) {
+      try {
+        final modelBytes = message['modelBytes'] as Uint8List;
+        labels = List<String>.from(message['labels'] as List);
+
+        final opts = InterpreterOptions();
+
+        // GPU delegate (Android OpenCL/GLES) — typically 20-80ms inference
+        try { opts.addDelegate(GpuDelegateV2()); } catch (_) {}
+        // XNNPACK (CPU NEON fallback) — ~200-400ms if GPU fails
+        try { opts.addDelegate(XNNPackDelegate()); } catch (_) {}
+
+        interpreter = Interpreter.fromBuffer(modelBytes, options: opts);
+
+        // Verify input/output shapes
+        final inputShape = interpreter!.getInputTensor(0).shape;
+        final outputShape = interpreter!.getOutputTensor(0).shape;
+        debugPrint('[Worker] Input shape: $inputShape');
+        debugPrint('[Worker] Output shape: $outputShape');
+
+        // Pre-allocate buffers: NCHW input (3x640x640), output (15x8400 column-major)
+        inputBuffer = Float32List(3 * 640 * 640);
+        outputBuffer = Float32List(15 * 8400);
+
+        initialized = true;
+        debugPrint('[Worker] TFLite ready');
+        mainSendPort.send(<String, dynamic>{'ready': true});
+      } catch (e) {
+        debugPrint('[Worker] Init error: $e');
+        mainSendPort.send(<String, dynamic>{'error': e.toString()});
+      }
+      return;
+    }
+
+    if (!initialized) return;
+
+    // Frame message
     if (message is List<dynamic> && message.length >= 9) {
       try {
-        final start = DateTime.now();
-        final floatData = _preprocessFromList(message);
-        final elapsed = DateTime.now().difference(start).inMilliseconds;
-        final tensorBytes = TransferableTypedData.fromList([
-          floatData.buffer.asUint8List(),
-        ]);
+        final preStart = DateTime.now();
+        final args = message;
+
+        final yMat = (args[2] as TransferableTypedData).materialize().asUint8List();
+        final uMat = (args[3] as TransferableTypedData).materialize().asUint8List();
+        final vMat = (args[4] as TransferableTypedData).materialize().asUint8List();
+
+        _yuvToNchw(
+          width: args[0] as int,
+          height: args[1] as int,
+          yBytes: yMat,
+          uBytes: uMat,
+          vBytes: vMat,
+          yRowStride: args[5] as int,
+          uvRowStride: args[6] as int,
+          uvPixelStride: args[7] as int,
+          needsRotate: args[8] as bool,
+          out: inputBuffer!,
+        );
+        final preElapsed = DateTime.now().difference(preStart).inMilliseconds;
+
+        final inferStart = DateTime.now();
+        interpreter!.run(inputBuffer!.buffer, outputBuffer!.buffer);
+        final inferElapsed = DateTime.now().difference(inferStart).inMilliseconds;
+
+        final decodeStart = DateTime.now();
+        const decoder = RawYoloDecoder();
+        final decoded = decoder.decodeTfliteColumnar(
+          rawOutput: outputBuffer!,
+          labels: labels,
+          confidenceThreshold: 0.35,
+        );
+        final detections = decoded.map((d) => <String, dynamic>{
+          'label': d.label,
+          'confidence': d.confidence,
+          'left': d.left,
+          'top': d.top,
+          'right': d.right,
+          'bottom': d.bottom,
+        }).toList();
+        final decodeElapsed = DateTime.now().difference(decodeStart).inMilliseconds;
 
         mainSendPort.send(<String, dynamic>{
-          'tensorData': tensorBytes,
-          'preprocessMs': elapsed,
+          'type': 'result',
+          'detections': detections,
+          'preprocessMs': preElapsed,
+          'inferenceMs': inferElapsed,
+          'decodeMs': decodeElapsed,
+          'frameWidth': (args[8] as bool) ? (args[1] as int) : (args[0] as int),
+          'frameHeight': (args[8] as bool) ? (args[0] as int) : (args[1] as int),
         });
       } catch (e) {
-        // Silently drop errored frames
+        debugPrint('[Worker] Frame error: $e');
       }
     }
   });
 }
 
-Float32List _preprocessFromList(List<dynamic> args) {
-  final yMat = (args[2] as TransferableTypedData).materialize().asUint8List();
-  final uMat = (args[3] as TransferableTypedData).materialize().asUint8List();
-  final vMat = (args[4] as TransferableTypedData).materialize().asUint8List();
-
-  return _preprocessFrame(
-    width: args[0] as int,
-    height: args[1] as int,
-    yBytes: yMat,
-    uBytes: uMat,
-    vBytes: vMat,
-    yRowStride: args[5] as int,
-    uvRowStride: args[6] as int,
-    uvPixelStride: args[7] as int,
-    needsRotate: args[8] as bool,
-  );
-}
-
-Float32List _preprocessFrame({
+/// Convert YUV420_888 → NCHW Float32 [0,1] with optional 90° CW rotation.
+/// out must be [3 * 640 * 640] elements (NCHW layout: R, G, B channels each 640x640).
+void _yuvToNchw({
   required int width,
   required int height,
   required Uint8List yBytes,
@@ -480,52 +569,55 @@ Float32List _preprocessFrame({
   required int uvRowStride,
   required int uvPixelStride,
   required bool needsRotate,
+  required Float32List out,
 }) {
-  final rgba = Uint8List(width * height * 4);
-  for (var y = 0; y < height; y++) {
-    for (var x = 0; x < width; x++) {
-      final yIdx = y * yRowStride + x;
-      final yVal = yBytes[yIdx] & 0xff;
-      final uvY = y >> 1;
-      final uvX = x >> 1;
-      final uvIdx = uvY * uvRowStride + uvX * uvPixelStride;
-      final u = uBytes[uvIdx] & 0xff;
-      final v = vBytes[uvIdx] & 0xff;
+  const int outSize = 640;
+  const int stride = outSize * outSize;
 
-      final r = (yVal + 1.402 * (v - 128)).clamp(0, 255).toInt();
-      final g =
-          (yVal - 0.344 * (u - 128) - 0.714 * (v - 128)).clamp(0, 255).toInt();
-      final b = (yVal + 1.772 * (u - 128)).clamp(0, 255).toInt();
+  if (needsRotate) {
+    final w = width;
+    final h = height;
+    for (var oy = 0; oy < outSize; oy++) {
+      final srcXBase = (oy * w) ~/ outSize;
+      for (var ox = 0; ox < outSize; ox++) {
+        final srcX = srcXBase;
+        final srcY = (h - 1) - (ox * h) ~/ outSize;
 
-      final dstIdx = (y * width + x) * 4;
-      rgba[dstIdx] = r;
-      rgba[dstIdx + 1] = g;
-      rgba[dstIdx + 2] = b;
-      rgba[dstIdx + 3] = 255;
+        final yIdx = srcY * yRowStride + srcX;
+        final yVal = yBytes[yIdx] & 0xff;
+        final uvY = srcY >> 1;
+        final uvX = srcX >> 1;
+        final uvIdx = uvY * uvRowStride + uvX * uvPixelStride;
+        final u = uBytes[uvIdx] & 0xff;
+        final v = vBytes[uvIdx] & 0xff;
+
+        final pi = oy * outSize + ox;
+        out[pi] = (yVal + 1.402 * (v - 128)).clamp(0, 255) / 255.0;
+        out[stride + pi] = (yVal - 0.344 * (u - 128) - 0.714 * (v - 128)).clamp(0, 255) / 255.0;
+        out[2 * stride + pi] = (yVal + 1.772 * (u - 128)).clamp(0, 255) / 255.0;
+      }
+    }
+  } else {
+    for (var oy = 0; oy < outSize; oy++) {
+      final srcY = (oy * height) ~/ outSize;
+      for (var ox = 0; ox < outSize; ox++) {
+        final srcX = (ox * width) ~/ outSize;
+
+        final yIdx = srcY * yRowStride + srcX;
+        final yVal = yBytes[yIdx] & 0xff;
+        final uvY = srcY >> 1;
+        final uvX = srcX >> 1;
+        final uvIdx = uvY * uvRowStride + uvX * uvPixelStride;
+        final u = uBytes[uvIdx] & 0xff;
+        final v = vBytes[uvIdx] & 0xff;
+
+        final pi = oy * outSize + ox;
+        out[pi] = (yVal + 1.402 * (v - 128)).clamp(0, 255) / 255.0;
+        out[stride + pi] = (yVal - 0.344 * (u - 128) - 0.714 * (v - 128)).clamp(0, 255) / 255.0;
+        out[2 * stride + pi] = (yVal + 1.772 * (u - 128)).clamp(0, 255) / 255.0;
+      }
     }
   }
-
-  final src = img.Image.fromBytes(
-    width: width,
-    height: height,
-    bytes: rgba.buffer,
-    numChannels: 4,
-  );
-  final upright = needsRotate ? img.copyRotate(src, angle: 90) : src;
-  final resized = img.copyResize(upright, width: 640, height: 640);
-
-  final floatData = Float32List(1 * 3 * 640 * 640);
-  for (var y = 0; y < 640; y++) {
-    for (var x = 0; x < 640; x++) {
-      final pixel = resized.getPixel(x, y);
-      final idx = y * 640 + x;
-      floatData[0 * 640 * 640 + idx] = pixel.r / 255.0;
-      floatData[1 * 640 * 640 + idx] = pixel.g / 255.0;
-      floatData[2 * 640 * 640 + idx] = pixel.b / 255.0;
-    }
-  }
-
-  return floatData;
 }
 
 class _PerfOverlay extends StatelessWidget {

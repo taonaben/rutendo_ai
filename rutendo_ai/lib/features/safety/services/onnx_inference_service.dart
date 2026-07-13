@@ -1,21 +1,18 @@
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
-import 'package:onnxruntime/onnxruntime.dart';
 
 class OnnxModelAssets {
   const OnnxModelAssets._();
 
-  /// 11-class pruned COCO model (person, bicycle, car, etc.)
-  static const cocoPrunedModelPath = 'assets/models/best.onnx';
+  static const tfliteModelPath = 'assets/models/yolo11n.tflite';
   static const cocoPrunedLabelsPath = 'assets/models/labels.txt';
 
-  /// 10-class fine-tuned Roboflow model (animal, barrier, bike, etc.)
   static const roboflowModelPath = 'assets/models/roboflow_10class.onnx';
   static const roboflowLabelsPath = 'assets/models/roboflow_10class_labels.txt';
 
-  /// Currently active model — swap this to switch models
-  static const modelPath = cocoPrunedModelPath;
+  /// Default: TFLite model for GPU-accelerated inference
+  static const modelPath = tfliteModelPath;
   static const labelsPath = cocoPrunedLabelsPath;
 }
 
@@ -28,25 +25,17 @@ class OnnxInferenceService {
   final String modelPath;
   final String labelsPath;
 
-  OrtSession? _session;
-  OrtSessionOptions? _sessionOptions;
+  Uint8List? _modelBytes;
   List<String> _labels = const [];
 
-  bool get isLoaded => _session != null;
+  bool get isLoaded => _modelBytes != null;
+
+  Uint8List? get modelBytes => _modelBytes;
 
   List<String> get labels => List.unmodifiable(_labels);
 
-  List<String> get inputNames => List.unmodifiable(_session?.inputNames ?? []);
-
-  List<String> get outputNames =>
-      List.unmodifiable(_session?.outputNames ?? []);
-
   Future<void> load() async {
-    if (isLoaded) {
-      return;
-    }
-
-    OrtEnv.instance.init();
+    if (isLoaded) return;
 
     final labelsText = await rootBundle.loadString(labelsPath);
     _labels =
@@ -56,59 +45,12 @@ class OnnxInferenceService {
             .where((label) => label.isNotEmpty)
             .toList(growable: false);
 
-    final modelBytes = await rootBundle.load(modelPath);
-
-    _sessionOptions = OrtSessionOptions()
-      ..setIntraOpNumThreads(4)
-      ..setSessionGraphOptimizationLevel(GraphOptimizationLevel.ortEnableAll)
-      ..appendXnnpackProvider();
-
-    _session = OrtSession.fromBuffer(
-      modelBytes.buffer.asUint8List(),
-      _sessionOptions!,
-    );
-  }
-
-  Future<List<OrtValue?>> runRaw({
-    required String inputName,
-    required Float32List input,
-    required List<int> inputShape,
-  }) async {
-    final session = _session;
-    if (session == null) {
-      throw StateError('ONNX model is not loaded. Call load() first.');
-    }
-
-    final inputTensor = OrtValueTensor.createTensorWithDataList(
-      input,
-      inputShape,
-    );
-    final runOptions = OrtRunOptions();
-
-    try {
-      final outputFuture = session.runAsync(runOptions, {
-        inputName: inputTensor,
-      });
-      if (outputFuture == null) {
-        return const [];
-      }
-      return await outputFuture;
-    } finally {
-      inputTensor.release();
-      runOptions.release();
-    }
+    final bytes = await rootBundle.load(modelPath);
+    _modelBytes = bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
   }
 
   void release() {
-    _session?.release();
-    _session = null;
-    _sessionOptions?.release();
-    _sessionOptions = null;
-    OrtEnv.instance.release();
-  }
-
-  void _log(String message) {
-    // ignore: avoid_print
-    print('[OnnxInferenceService] $message');
+    _modelBytes = null;
+    _labels = const [];
   }
 }
