@@ -3,21 +3,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rutendo_ai/main.dart';
 
 void main() {
-  testWidgets('Risk engine demo updates when a scenario is selected', (
+  testWidgets('Risk engine demo renders core controls', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(const MyApp());
 
-    expect(find.text('Risk Engine Demo'), findsOneWidget);
-    expect(find.text('Object'), findsOneWidget);
-    expect(find.text('chair'), findsOneWidget);
-    expect(find.text('Severity'), findsOneWidget);
-    expect(find.text('high'), findsOneWidget);
+    expect(find.text('Start Capture'), findsOneWidget);
+    expect(find.text('Replay Latest'), findsOneWidget);
+    expect(find.text('Moving'), findsOneWidget);
+    expect(find.textContaining('status=Idle'), findsOneWidget);
+    expect(find.textContaining('risk=none'), findsOneWidget);
 
-    await tester.tap(find.text('Far bench'));
+    await tester.tap(find.text('Start Capture'));
     await tester.pump();
 
-    expect(find.text('No alert'), findsOneWidget);
-    expect(find.text('none'), findsNWidgets(2));
+    expect(
+      find.textContaining('Capture unavailable on this platform'),
+      findsOneWidget,
+    );
   });
 }
