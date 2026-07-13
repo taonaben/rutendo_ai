@@ -110,6 +110,8 @@ flutter:
   assets:
     - assets/models/best.onnx
     - assets/models/labels.txt
+    - assets/models/roboflow_10class.onnx
+    - assets/models/roboflow_10class_labels.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -6,8 +6,17 @@ import 'package:onnxruntime/onnxruntime.dart';
 class OnnxModelAssets {
   const OnnxModelAssets._();
 
-  static const modelPath = 'assets/models/best.onnx';
-  static const labelsPath = 'assets/models/labels.txt';
+  /// 11-class pruned COCO model (person, bicycle, car, etc.)
+  static const cocoPrunedModelPath = 'assets/models/best.onnx';
+  static const cocoPrunedLabelsPath = 'assets/models/labels.txt';
+
+  /// 10-class fine-tuned Roboflow model (animal, barrier, bike, etc.)
+  static const roboflowModelPath = 'assets/models/roboflow_10class.onnx';
+  static const roboflowLabelsPath = 'assets/models/roboflow_10class_labels.txt';
+
+  /// Currently active model — swap this to switch models
+  static const modelPath = cocoPrunedModelPath;
+  static const labelsPath = cocoPrunedLabelsPath;
 }
 
 class OnnxInferenceService {
