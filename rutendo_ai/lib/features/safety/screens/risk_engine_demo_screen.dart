@@ -299,7 +299,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
               color: const Color(0xFF1A1A1A),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
               child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
+                scrollDirection: Axis.vertical,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -325,7 +325,9 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    Row(
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
                       children: [
                         ElevatedButton(
                           onPressed:
@@ -361,6 +363,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
                         ),
                       ],
                     ),
+                      ),
                     Text(
                       'status=$_statusText  savedFrames=$_persistedFrameCount',
                       style: const TextStyle(
@@ -397,7 +400,8 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
                       ),
                     ],
                     const Divider(color: Colors.white24, height: 16),
-                    Expanded(
+                    SizedBox(
+                      height: 120,
                       child:
                           _detectionLog.isEmpty
                               ? const Text(
