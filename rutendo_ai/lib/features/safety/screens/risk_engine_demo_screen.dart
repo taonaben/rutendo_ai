@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:rutendo_ai/features/audio/audio_engine.dart';
 
 import '../models/cue_decision.dart';
 import '../models/detection_result.dart';
@@ -25,6 +26,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
   final _onnxService = OnnxInferenceService();
   final _calibrationStore = CalibrationHarnessStore();
+  final _audioEngine = AudioEngine(backend: ConsoleAudioBackend());
   final List<String> _detectionLog = [];
   List<DetectionResult> _liveDetections = const [];
   List<MotionObject> _liveMotionObjects = const [];
@@ -59,6 +61,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
       _liveDetections = detections;
       if (_liveMotionObjects.isEmpty) {
         _assessment = _riskEngine.assess(detections);
+        _audioEngine.updateFromAssessment(_assessment);
       }
 
       if (shouldAppendLogs) {
@@ -95,6 +98,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
         userIsMoving: _userIsMoving,
       );
     });
+    _audioEngine.updateFromAssessment(_assessment);
 
     final shouldPersist =
         _isRecording &&
@@ -202,6 +206,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
         _liveMotionObjects = motionObjects;
         _assessment = assessment;
       });
+      _audioEngine.updateFromAssessment(_assessment);
 
       final deltaMs = frame.timestampMs - previousTimestamp;
       previousTimestamp = frame.timestampMs;
@@ -214,6 +219,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
       _isReplaying = false;
       _statusText = 'Replay complete for session #${latestSession.id}';
     });
+    _audioEngine.updateFromAssessment(_assessment);
   }
 
   @override
@@ -223,6 +229,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
       unawaited(_calibrationStore.endSession(sessionId));
     }
     unawaited(_calibrationStore.close());
+    _audioEngine.dispose();
     _onnxService.release();
     super.dispose();
   }
