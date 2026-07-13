@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/cue_decision.dart';
 import '../models/detection_result.dart';
 import '../models/motion_object.dart';
+import '../services/calibration_codec.dart';
+import '../services/calibration_harness_store.dart';
 import '../services/onnx_inference_service.dart';
 import '../services/risk_engine.dart';
 import '../widgets/camera_preview_panel.dart';
@@ -17,8 +21,10 @@ class RiskEngineDemoScreen extends StatefulWidget {
 class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   static const _riskEngine = RiskEngine();
   static const Duration _logInterval = Duration(milliseconds: 500);
+  static const Duration _persistInterval = Duration(milliseconds: 250);
 
   final _onnxService = OnnxInferenceService();
+  final _calibrationStore = CalibrationHarnessStore();
   final List<String> _detectionLog = [];
   List<DetectionResult> _liveDetections = const [];
   List<MotionObject> _liveMotionObjects = const [];
@@ -29,7 +35,13 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   );
   int _detectionCounter = 0;
   DateTime _lastLogAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastPersistAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _userIsMoving = true;
+  bool _isRecording = false;
+  bool _isReplaying = false;
+  int? _activeSessionId;
+  int _persistedFrameCount = 0;
+  String _statusText = 'Idle';
 
   @override
   void initState() {
@@ -39,6 +51,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
   void _onLiveDetections(List<DetectionResult> detections) {
     if (!mounted) return;
+    if (_isReplaying) return;
     final now = DateTime.now();
     final shouldAppendLogs = now.difference(_lastLogAt) >= _logInterval;
 
@@ -73,6 +86,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
   void _onMotionObjects(List<MotionObject> motionObjects) {
     if (!mounted) return;
+    if (_isReplaying) return;
 
     setState(() {
       _liveMotionObjects = motionObjects;
@@ -81,10 +95,134 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
         userIsMoving: _userIsMoving,
       );
     });
+
+    final shouldPersist =
+        _isRecording &&
+        _activeSessionId != null &&
+        DateTime.now().difference(_lastPersistAt) >= _persistInterval;
+    if (shouldPersist) {
+      final sessionId = _activeSessionId;
+      if (sessionId != null) {
+        _lastPersistAt = DateTime.now();
+        unawaited(
+          _calibrationStore
+              .appendFrame(
+                sessionId: sessionId,
+                timestampMs: _lastPersistAt.millisecondsSinceEpoch,
+                detections: _liveDetections,
+                motionObjects: motionObjects,
+                riskAssessment: _assessment,
+              )
+              .then((_) {
+                if (!mounted) return;
+                setState(() {
+                  _persistedFrameCount += 1;
+                });
+              }),
+        );
+      }
+    }
+  }
+
+  Future<void> _startRecording() async {
+    if (_isRecording) return;
+    final sessionId = await _calibrationStore.startSession(
+      mode: 'live',
+      notes: 'risk_engine_demo',
+    );
+    if (!mounted) return;
+    setState(() {
+      _activeSessionId = sessionId;
+      _isRecording = true;
+      _persistedFrameCount = 0;
+      _statusText = 'Recording session #$sessionId';
+    });
+  }
+
+  Future<void> _stopRecording() async {
+    final sessionId = _activeSessionId;
+    if (!_isRecording || sessionId == null) return;
+    await _calibrationStore.endSession(sessionId);
+    if (!mounted) return;
+    setState(() {
+      _isRecording = false;
+      _activeSessionId = null;
+      _statusText = 'Saved session #$sessionId ($_persistedFrameCount frames)';
+    });
+  }
+
+  Future<void> _replayLatestSession() async {
+    if (_isReplaying) return;
+    if (_isRecording) {
+      await _stopRecording();
+    }
+
+    final latestSession = await _calibrationStore.latestCompletedSession();
+    if (latestSession == null) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'No saved sessions to replay';
+      });
+      return;
+    }
+
+    final frames = await _calibrationStore.framesForSession(latestSession.id);
+    if (frames.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'Session #${latestSession.id} has no frames';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isReplaying = true;
+      _statusText =
+          'Replaying session #${latestSession.id} (${frames.length} frames)';
+    });
+
+    var previousTimestamp = frames.first.timestampMs;
+    for (final frame in frames) {
+      if (!mounted) return;
+
+      final detections = CalibrationCodec.detectionsFromJson(
+        frame.detectionsJson,
+      );
+      final motionObjects = CalibrationCodec.motionObjectsFromJson(
+        frame.motionObjectsJson,
+      );
+      final assessment = _riskEngine.assessMotion(
+        motionObjects,
+        userIsMoving: _userIsMoving,
+      );
+
+      setState(() {
+        _liveDetections = detections;
+        _liveMotionObjects = motionObjects;
+        _assessment = assessment;
+      });
+
+      final deltaMs = frame.timestampMs - previousTimestamp;
+      previousTimestamp = frame.timestampMs;
+      final stepDelayMs = deltaMs.clamp(40, 220);
+      await Future.delayed(Duration(milliseconds: stepDelayMs));
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isReplaying = false;
+      _statusText = 'Replay complete for session #${latestSession.id}';
+    });
   }
 
   @override
   void dispose() {
+    final sessionId = _activeSessionId;
+    if (sessionId != null) {
+      unawaited(_calibrationStore.endSession(sessionId));
+    }
+    unawaited(_calibrationStore.close());
     _onnxService.release();
     super.dispose();
   }
@@ -131,6 +269,49 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      ElevatedButton(
+                        onPressed:
+                            _isReplaying
+                                ? null
+                                : (_isRecording
+                                    ? _stopRecording
+                                    : _startRecording),
+                        child: Text(
+                          _isRecording ? 'Stop Capture' : 'Start Capture',
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: _isReplaying ? null : _replayLatestSession,
+                        child: const Text('Replay Latest'),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Moving',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Switch(
+                        value: _userIsMoving,
+                        onChanged:
+                            _isReplaying
+                                ? null
+                                : (value) {
+                                  setState(() {
+                                    _userIsMoving = value;
+                                  });
+                                },
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'status=$_statusText  savedFrames=$_persistedFrameCount',
+                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 4),
                   Text(
