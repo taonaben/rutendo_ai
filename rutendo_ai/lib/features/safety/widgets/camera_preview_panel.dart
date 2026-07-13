@@ -7,18 +7,27 @@ import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
 import '../models/detection_result.dart';
+import '../models/frame_metadata.dart';
+import '../models/motion_object.dart';
+import '../models/tracked_object.dart';
+import '../services/detection_parser.dart';
+import '../services/motion_estimator.dart';
 import '../services/onnx_inference_service.dart';
-import '../services/yolo_decoder.dart';
+import '../services/tracker.dart';
 
 class CameraPreviewPanel extends StatefulWidget {
   const CameraPreviewPanel({
     required this.onnxService,
     required this.onDetections,
+    this.onTrackedObjects,
+    this.onMotionObjects,
     super.key,
   });
 
   final OnnxInferenceService onnxService;
   final void Function(List<DetectionResult> detections) onDetections;
+  final void Function(List<TrackedObject> trackedObjects)? onTrackedObjects;
+  final void Function(List<MotionObject> motionObjects)? onMotionObjects;
 
   @override
   State<CameraPreviewPanel> createState() => _CameraPreviewPanelState();
@@ -26,6 +35,11 @@ class CameraPreviewPanel extends StatefulWidget {
 
 class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
   static const Duration _inferenceInterval = Duration(milliseconds: 120);
+  static const int _modelInputSize = 640;
+
+  final DetectionParser _detectionParser = const DetectionParser();
+  final SimpleTracker _tracker = SimpleTracker();
+  final MotionEstimator _motionEstimator = MotionEstimator();
 
   CameraController? _controller;
   String _status = 'Starting camera...';
@@ -108,10 +122,29 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
         final raw = outputs[0]!.value;
         if (raw == null) return;
 
-        final detections = decodeYolo(
-          rawOutput: raw as Object,
+        final frameWidth = _sensorSize?.width.round() ?? _modelInputSize;
+        final frameHeight = _sensorSize?.height.round() ?? _modelInputSize;
+        final timestampMs = _lastFrameAcceptedAtMs;
+        final detections = _detectionParser.parseYolo(
+          rawOutput: raw,
           labels: widget.onnxService.labels,
           confidenceThreshold: 0.35,
+          metadata: FrameMetadata(
+            frameWidth: frameWidth,
+            frameHeight: frameHeight,
+            modelInputWidth: _modelInputSize,
+            modelInputHeight: _modelInputSize,
+            timestampMs: timestampMs,
+          ),
+        );
+        final trackedObjects = _tracker.update(
+          detections: detections,
+          timestampMs: timestampMs,
+        );
+        final motionObjects = _motionEstimator.update(
+          trackedObjects: trackedObjects,
+          frameHeightPx: frameHeight,
+          timestampMs: timestampMs,
         );
         final decodeElapsed = DateTime.now().difference(decodeStart);
 
@@ -125,6 +158,8 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
                 DateTime.now().millisecondsSinceEpoch - _lastFrameAcceptedAtMs;
           });
           widget.onDetections(detections);
+          widget.onTrackedObjects?.call(trackedObjects);
+          widget.onMotionObjects?.call(motionObjects);
         }
       }
     } catch (e) {
@@ -228,6 +263,8 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
   void dispose() {
     _controller?.stopImageStream();
     _controller?.dispose();
+    _tracker.reset();
+    _motionEstimator.reset();
     _workerResponsePort.close();
     _workerIsolate?.kill();
     super.dispose();
@@ -250,7 +287,7 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
                   child: FittedBox(
                     fit: BoxFit.cover,
                     child: SizedBox(
-                      width: controller!.value.previewSize?.height ?? 720,
+                      width: controller.value.previewSize?.height ?? 720,
                       height: controller.value.previewSize?.width ?? 1280,
                       child: CameraPreview(controller),
                     ),
