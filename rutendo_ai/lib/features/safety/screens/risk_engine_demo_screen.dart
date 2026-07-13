@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/cue_decision.dart';
 import '../models/detection_result.dart';
-import '../models/hazard.dart';
+import '../models/motion_object.dart';
 import '../services/onnx_inference_service.dart';
 import '../services/risk_engine.dart';
 import '../widgets/camera_preview_panel.dart';
@@ -21,10 +21,15 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   final _onnxService = OnnxInferenceService();
   final List<String> _detectionLog = [];
   List<DetectionResult> _liveDetections = const [];
-  RiskAssessment _assessment = _riskEngine.assess(const []);
-  int _lastInferenceMs = 0;
+  List<MotionObject> _liveMotionObjects = const [];
+  RiskAssessment _assessment = const RiskAssessment(
+    hazards: [],
+    audioCue: AudioCueDecision(pattern: AudioCuePattern.none, intervalMs: 0),
+    hapticCue: HapticCueDecision(pattern: HapticCuePattern.none, durationMs: 0),
+  );
   int _detectionCounter = 0;
   DateTime _lastLogAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _userIsMoving = true;
 
   @override
   void initState() {
@@ -39,7 +44,9 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
     setState(() {
       _liveDetections = detections;
-      _assessment = _riskEngine.assess(detections);
+      if (_liveMotionObjects.isEmpty) {
+        _assessment = _riskEngine.assess(detections);
+      }
 
       if (shouldAppendLogs) {
         _lastLogAt = now;
@@ -64,6 +71,18 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
     });
   }
 
+  void _onMotionObjects(List<MotionObject> motionObjects) {
+    if (!mounted) return;
+
+    setState(() {
+      _liveMotionObjects = motionObjects;
+      _assessment = _riskEngine.assessMotion(
+        motionObjects,
+        userIsMoving: _userIsMoving,
+      );
+    });
+  }
+
   @override
   void dispose() {
     _onnxService.release();
@@ -81,6 +100,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
             child: CameraPreviewPanel(
               onnxService: _onnxService,
               onDetections: _onLiveDetections,
+              onMotionObjects: _onMotionObjects,
             ),
           ),
           Expanded(
@@ -111,6 +131,14 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'risk=${_assessment.primaryHazard?.severity.name ?? 'none'}  motion=${_liveMotionObjects.length}',
+                    style: const TextStyle(
+                      color: Colors.lightBlueAccent,
+                      fontSize: 12,
+                    ),
                   ),
                   if (_liveDetections.isNotEmpty) ...[
                     const SizedBox(height: 6),
