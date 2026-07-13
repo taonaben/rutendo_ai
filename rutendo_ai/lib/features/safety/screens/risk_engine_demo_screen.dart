@@ -1,10 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../models/cue_decision.dart';
-import '../models/detection_result.dart';
-import '../models/hazard.dart';
 import '../services/onnx_inference_service.dart';
-import '../services/risk_engine.dart';
 import '../widgets/camera_preview_panel.dart';
 
 class RiskEngineDemoScreen extends StatefulWidget {
@@ -15,23 +11,10 @@ class RiskEngineDemoScreen extends StatefulWidget {
 }
 
 class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
-  static const _riskEngine = RiskEngine();
-
   final _onnxService = OnnxInferenceService();
 
-  late _DemoScenario _selectedScenario = _scenarios.first;
-  late RiskAssessment _assessment = _riskEngine.assess(
-    _selectedScenario.detections,
-  );
   String _modelStatus = 'Not loaded';
   bool _isLoadingModel = false;
-
-  void _selectScenario(_DemoScenario scenario) {
-    setState(() {
-      _selectedScenario = scenario;
-      _assessment = _riskEngine.assess(scenario.detections);
-    });
-  }
 
   Future<void> _loadModel() async {
     setState(() {
@@ -71,30 +54,12 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hazard = _assessment.primaryHazard;
-
     return Scaffold(
       appBar: AppBar(title: const Text('Risk Engine Demo')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text('Scenario', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 8),
-            Text(_selectedScenario.description),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final scenario in _scenarios)
-                  FilledButton.tonal(
-                    onPressed: () => _selectScenario(scenario),
-                    child: Text(scenario.name),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 24),
             const CameraPreviewPanel(),
             const SizedBox(height: 24),
             _ModelPanel(
@@ -104,7 +69,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
               onLoad: _loadModel,
             ),
             const SizedBox(height: 24),
-            _ResultPanel(assessment: _assessment, hazard: hazard),
+            const _LiveDetectionPanel(),
           ],
         ),
       ),
@@ -151,49 +116,20 @@ class _ModelPanel extends StatelessWidget {
   }
 }
 
-class _ResultPanel extends StatelessWidget {
-  const _ResultPanel({required this.assessment, required this.hazard});
-
-  final RiskAssessment assessment;
-  final Hazard? hazard;
+class _LiveDetectionPanel extends StatelessWidget {
+  const _LiveDetectionPanel();
 
   @override
   Widget build(BuildContext context) {
-    final selectedHazard = hazard;
-
-    if (selectedHazard == null) {
-      return const _InfoGroup(
-        title: 'Decision',
-        rows: [
-          _InfoRow(label: 'Status', value: 'No alert'),
-          _InfoRow(label: 'Reason', value: 'No important hazard selected'),
-          _InfoRow(label: 'Audio', value: 'none'),
-          _InfoRow(label: 'Haptic', value: 'none'),
-        ],
-      );
-    }
-
-    return _InfoGroup(
-      title: 'Decision',
+    return const _InfoGroup(
+      title: 'Live Detection',
       rows: [
-        _InfoRow(label: 'Object', value: selectedHazard.detection.label),
-        _InfoRow(label: 'Zone', value: selectedHazard.zone.name),
-        _InfoRow(label: 'Distance', value: selectedHazard.distance.name),
-        _InfoRow(label: 'Severity', value: selectedHazard.severity.name),
-        _InfoRow(label: 'Reason', value: selectedHazard.reason),
+        _InfoRow(label: 'Status', value: 'Not connected yet'),
         _InfoRow(
-          label: 'Audio',
-          value:
-              '${assessment.audioCue.pattern.name} '
-              '(${assessment.audioCue.intervalMs}ms)',
+          label: 'Next step',
+          value: 'Send camera frames to ONNX and parse output0',
         ),
-        _InfoRow(
-          label: 'Haptic',
-          value:
-              '${assessment.hapticCue.pattern.name} '
-              '(${assessment.hapticCue.durationMs}ms)',
-        ),
-        _InfoRow(label: 'Hazards shown', value: '${assessment.hazards.length}'),
+        _InfoRow(label: 'Risk engine', value: 'Ready for real detections'),
       ],
     );
   }
@@ -259,90 +195,3 @@ class _InfoRow extends StatelessWidget {
     );
   }
 }
-
-class _DemoScenario {
-  const _DemoScenario({
-    required this.name,
-    required this.description,
-    required this.detections,
-  });
-
-  final String name;
-  final String description;
-  final List<DetectionResult> detections;
-}
-
-const _scenarios = [
-  _DemoScenario(
-    name: 'Near center',
-    description: 'A chair is close and directly in the walking path.',
-    detections: [
-      DetectionResult(
-        label: 'chair',
-        confidence: 0.86,
-        left: 0.40,
-        top: 0.20,
-        right: 0.60,
-        bottom: 0.96,
-      ),
-    ],
-  ),
-  _DemoScenario(
-    name: 'Car right',
-    description: 'A car is medium distance on the right side.',
-    detections: [
-      DetectionResult(
-        label: 'car',
-        confidence: 0.81,
-        left: 0.68,
-        top: 0.30,
-        right: 0.94,
-        bottom: 0.75,
-      ),
-    ],
-  ),
-  _DemoScenario(
-    name: 'Far bench',
-    description: 'A bench is far away and should not trigger an alert.',
-    detections: [
-      DetectionResult(
-        label: 'bench',
-        confidence: 0.92,
-        left: 0.37,
-        top: 0.10,
-        right: 0.56,
-        bottom: 0.35,
-      ),
-    ],
-  ),
-  _DemoScenario(
-    name: 'Multiple',
-    description: 'Several detections arrive, but only the top hazards matter.',
-    detections: [
-      DetectionResult(
-        label: 'person',
-        confidence: 0.88,
-        left: 0.40,
-        top: 0.20,
-        right: 0.60,
-        bottom: 0.95,
-      ),
-      DetectionResult(
-        label: 'car',
-        confidence: 0.74,
-        left: 0.68,
-        top: 0.28,
-        right: 0.96,
-        bottom: 0.77,
-      ),
-      DetectionResult(
-        label: 'chair',
-        confidence: 0.90,
-        left: 0.05,
-        top: 0.20,
-        right: 0.30,
-        bottom: 0.82,
-      ),
-    ],
-  ),
-];
