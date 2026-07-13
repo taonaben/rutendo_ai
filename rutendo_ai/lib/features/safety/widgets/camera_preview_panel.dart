@@ -37,6 +37,12 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
   static const Duration _inferenceInterval = Duration(milliseconds: 120);
   static const int _modelInputSize = 640;
 
+  static bool get _isWidgetTest {
+    final binding = WidgetsBinding.instance;
+    return binding != null &&
+        binding.runtimeType.toString().contains('TestWidgetsFlutterBinding');
+  }
+
   final DetectionParser _detectionParser = const DetectionParser();
   final SimpleTracker _tracker = SimpleTracker();
   final MotionEstimator _motionEstimator = MotionEstimator();
@@ -63,6 +69,10 @@ class _CameraPreviewPanelState extends State<CameraPreviewPanel> {
   @override
   void initState() {
     super.initState();
+    if (_isWidgetTest) {
+      _status = 'Camera disabled in tests';
+      return;
+    }
     _initWorker();
     Future.microtask(_startCamera);
   }

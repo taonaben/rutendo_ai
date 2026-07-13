@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
 
 import '../safety/models/cue_decision.dart';
 import '../safety/models/hazard.dart';
@@ -53,20 +55,179 @@ abstract class AudioPlaybackBackend {
   Future<void> playCue(AudioCueCommand command);
 
   Future<void> stopAll();
+
+  Future<void> dispose();
 }
 
-class ConsoleAudioBackend implements AudioPlaybackBackend {
+class NoopAudioBackend implements AudioPlaybackBackend {
+  @override
+  Future<void> playCue(AudioCueCommand command) async {}
+
+  @override
+  Future<void> stopAll() async {}
+
+  @override
+  Future<void> dispose() async {}
+}
+
+AudioPlaybackBackend createDefaultAudioBackend() {
+  final binding = WidgetsBinding.instance;
+  final isWidgetTest = binding.runtimeType.toString().contains(
+    'TestWidgetsFlutterBinding',
+  );
+
+  if (kIsWeb || isWidgetTest) {
+    return NoopAudioBackend();
+  }
+
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.android || TargetPlatform.iOS => SoloudAudioBackend(),
+    _ => NoopAudioBackend(),
+  };
+}
+
+class SoloudAudioBackend implements AudioPlaybackBackend {
+  SoloudAudioBackend({
+    this.masterVolume = 0.45,
+    this.staticAssetKey = 'assets/audio_cues/static_tick.wav',
+    this.dynamicAssetKey = 'assets/audio_cues/dynamic_tick.wav',
+    this.criticalAssetKey = 'assets/audio_cues/critical_chirp.wav',
+  });
+
+  final double masterVolume;
+  final String staticAssetKey;
+  final String dynamicAssetKey;
+  final String criticalAssetKey;
+
+  final Map<AudioCueFamily, AudioSource> _sources =
+      <AudioCueFamily, AudioSource>{};
+
+  SoLoud? _soloud;
+  bool _initialized = false;
+  bool _backendUnavailable = false;
+  SoundHandle? _lastHandle;
+
+  SoLoud? _safeSoloud() {
+    if (_backendUnavailable) {
+      return null;
+    }
+
+    final existing = _soloud;
+    if (existing != null) {
+      return existing;
+    }
+
+    try {
+      final instance = SoLoud.instance;
+      _soloud = instance;
+      return instance;
+    } catch (_) {
+      _backendUnavailable = true;
+      return null;
+    }
+  }
+
+  Future<bool> _ensureInitialized() async {
+    final soloud = _safeSoloud();
+    if (soloud == null) {
+      return false;
+    }
+
+    if (_initialized && soloud.isInitialized) {
+      return true;
+    }
+
+    try {
+      await soloud.init();
+      _initialized = true;
+      return true;
+    } catch (_) {
+      _backendUnavailable = true;
+      return false;
+    }
+  }
+
+  Future<AudioSource?> _sourceForFamily(AudioCueFamily family) async {
+    final existing = _sources[family];
+    if (existing != null) {
+      return existing;
+    }
+
+    final assetKey = switch (family) {
+      AudioCueFamily.staticObstacle => staticAssetKey,
+      AudioCueFamily.dynamicObject => dynamicAssetKey,
+      AudioCueFamily.critical => criticalAssetKey,
+    };
+
+    final soloud = _safeSoloud();
+    if (soloud == null) {
+      return null;
+    }
+
+    try {
+      final source = await soloud.loadAsset(assetKey);
+      _sources[family] = source;
+      return source;
+    } catch (_) {
+      _backendUnavailable = true;
+      return null;
+    }
+  }
+
   @override
   Future<void> playCue(AudioCueCommand command) async {
-    debugPrint(
-      '[AudioCue] track=${command.trackId} family=${command.family.name} '
-      'pan=${command.pan.toStringAsFixed(2)} intervalMs=${command.intervalMs}',
+    if (!await _ensureInitialized()) {
+      return;
+    }
+
+    final soloud = _safeSoloud();
+    if (soloud == null) {
+      return;
+    }
+
+    final source = await _sourceForFamily(command.family);
+    if (source == null) {
+      return;
+    }
+
+    final previous = _lastHandle;
+    if (previous != null && soloud.getIsValidVoiceHandle(previous)) {
+      await soloud.stop(previous);
+    }
+
+    final handle = await soloud.play(
+      source,
+      volume: masterVolume,
+      pan: command.pan,
     );
+    _lastHandle = handle;
   }
 
   @override
   Future<void> stopAll() async {
-    debugPrint('[AudioCue] stop');
+    final soloud = _safeSoloud();
+    if (!_initialized || soloud == null || !soloud.isInitialized) {
+      return;
+    }
+
+    final previous = _lastHandle;
+    if (previous != null && soloud.getIsValidVoiceHandle(previous)) {
+      await soloud.stop(previous);
+    }
+    _lastHandle = null;
+  }
+
+  @override
+  Future<void> dispose() async {
+    await stopAll();
+    final soloud = _safeSoloud();
+    if (_initialized && soloud != null && soloud.isInitialized) {
+      await soloud.disposeAllSources();
+      soloud.deinit();
+    }
+    _sources.clear();
+    _soloud = null;
+    _initialized = false;
   }
 }
 
@@ -226,5 +387,6 @@ class AudioEngine {
   void dispose() {
     _stop();
     _lastPlayedByTrackId.clear();
+    unawaited(backend.dispose());
   }
 }

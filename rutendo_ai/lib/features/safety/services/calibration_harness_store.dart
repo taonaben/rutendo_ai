@@ -18,7 +18,7 @@ class CalibrationHarnessStore {
         .insert(
           CalibrationSessionsCompanion.insert(
             startedAtMs: DateTime.now().millisecondsSinceEpoch,
-            mode: mode,
+            mode: drift.Value(mode),
             notes:
                 notes == null ? const drift.Value.absent() : drift.Value(notes),
           ),

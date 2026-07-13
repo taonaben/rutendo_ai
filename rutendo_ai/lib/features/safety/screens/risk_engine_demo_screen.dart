@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:rutendo_ai/features/audio/audio_engine.dart';
 
@@ -25,8 +26,8 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   static const Duration _persistInterval = Duration(milliseconds: 250);
 
   final _onnxService = OnnxInferenceService();
-  final _calibrationStore = CalibrationHarnessStore();
-  final _audioEngine = AudioEngine(backend: ConsoleAudioBackend());
+  final CalibrationHarnessStore? _calibrationStore = _createCalibrationStore();
+  final _audioEngine = AudioEngine(backend: createDefaultAudioBackend());
   final List<String> _detectionLog = [];
   List<DetectionResult> _liveDetections = const [];
   List<MotionObject> _liveMotionObjects = const [];
@@ -45,10 +46,25 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   int _persistedFrameCount = 0;
   String _statusText = 'Idle';
 
+  static bool get _isWidgetTest {
+    final binding = WidgetsBinding.instance;
+    return binding.runtimeType.toString().contains('TestWidgetsFlutterBinding');
+  }
+
+  static CalibrationHarnessStore? _createCalibrationStore() {
+    if (kIsWeb || _isWidgetTest) return null;
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.android || TargetPlatform.iOS => CalibrationHarnessStore(),
+      _ => null,
+    };
+  }
+
   @override
   void initState() {
     super.initState();
-    _onnxService.load().catchError((_) {});
+    if (!_isWidgetTest) {
+      _onnxService.load().catchError((_) {});
+    }
   }
 
   void _onLiveDetections(List<DetectionResult> detections) {
@@ -105,11 +121,16 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
         _activeSessionId != null &&
         DateTime.now().difference(_lastPersistAt) >= _persistInterval;
     if (shouldPersist) {
+      final store = _calibrationStore;
+      if (store == null) {
+        return;
+      }
+
       final sessionId = _activeSessionId;
       if (sessionId != null) {
         _lastPersistAt = DateTime.now();
         unawaited(
-          _calibrationStore
+          store
               .appendFrame(
                 sessionId: sessionId,
                 timestampMs: _lastPersistAt.millisecondsSinceEpoch,
@@ -130,7 +151,16 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
   Future<void> _startRecording() async {
     if (_isRecording) return;
-    final sessionId = await _calibrationStore.startSession(
+    final store = _calibrationStore;
+    if (store == null) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'Capture unavailable on this platform';
+      });
+      return;
+    }
+
+    final sessionId = await store.startSession(
       mode: 'live',
       notes: 'risk_engine_demo',
     );
@@ -144,9 +174,12 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   }
 
   Future<void> _stopRecording() async {
+    final store = _calibrationStore;
+    if (store == null) return;
+
     final sessionId = _activeSessionId;
     if (!_isRecording || sessionId == null) return;
-    await _calibrationStore.endSession(sessionId);
+    await store.endSession(sessionId);
     if (!mounted) return;
     setState(() {
       _isRecording = false;
@@ -156,12 +189,21 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
   }
 
   Future<void> _replayLatestSession() async {
+    final store = _calibrationStore;
+    if (store == null) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'Replay unavailable on this platform';
+      });
+      return;
+    }
+
     if (_isReplaying) return;
     if (_isRecording) {
       await _stopRecording();
     }
 
-    final latestSession = await _calibrationStore.latestCompletedSession();
+    final latestSession = await store.latestCompletedSession();
     if (latestSession == null) {
       if (!mounted) return;
       setState(() {
@@ -170,7 +212,7 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
       return;
     }
 
-    final frames = await _calibrationStore.framesForSession(latestSession.id);
+    final frames = await store.framesForSession(latestSession.id);
     if (frames.isEmpty) {
       if (!mounted) return;
       setState(() {
@@ -224,11 +266,14 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
 
   @override
   void dispose() {
+    final store = _calibrationStore;
     final sessionId = _activeSessionId;
-    if (sessionId != null) {
-      unawaited(_calibrationStore.endSession(sessionId));
+    if (sessionId != null && store != null) {
+      unawaited(store.endSession(sessionId));
     }
-    unawaited(_calibrationStore.close());
+    if (store != null) {
+      unawaited(store.close());
+    }
     _audioEngine.dispose();
     _onnxService.release();
     super.dispose();
@@ -253,122 +298,131 @@ class _RiskEngineDemoScreenState extends State<RiskEngineDemoScreen> {
             child: Container(
               color: const Color(0xFF1A1A1A),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        _onnxService.isLoaded
-                            ? 'Model: YOLO11n (pruned, 11 classes)'
-                            : 'Model: loading...',
-                        style: const TextStyle(
-                          color: Colors.green,
-                          fontSize: 12,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          _onnxService.isLoaded
+                              ? 'Model: YOLO11n (pruned, 11 classes)'
+                              : 'Model: loading...',
+                          style: const TextStyle(
+                            color: Colors.green,
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
-                      Text(
-                        '${_liveDetections.length} obj(s)',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
+                        Text(
+                          '${_liveDetections.length} obj(s)',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      ElevatedButton(
-                        onPressed:
-                            _isReplaying
-                                ? null
-                                : (_isRecording
-                                    ? _stopRecording
-                                    : _startRecording),
-                        child: Text(
-                          _isRecording ? 'Stop Capture' : 'Start Capture',
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: _isReplaying ? null : _replayLatestSession,
-                        child: const Text('Replay Latest'),
-                      ),
-                      const SizedBox(width: 12),
-                      const Text(
-                        'Moving',
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
-                      ),
-                      Switch(
-                        value: _userIsMoving,
-                        onChanged:
-                            _isReplaying
-                                ? null
-                                : (value) {
-                                  setState(() {
-                                    _userIsMoving = value;
-                                  });
-                                },
-                      ),
-                    ],
-                  ),
-                  Text(
-                    'status=$_statusText  savedFrames=$_persistedFrameCount',
-                    style: const TextStyle(color: Colors.white54, fontSize: 11),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'risk=${_assessment.primaryHazard?.severity.name ?? 'none'}  motion=${_liveMotionObjects.length}',
-                    style: const TextStyle(
-                      color: Colors.lightBlueAccent,
-                      fontSize: 12,
+                      ],
                     ),
-                  ),
-                  if (_liveDetections.isNotEmpty) ...[
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        ElevatedButton(
+                          onPressed:
+                              _isReplaying
+                                  ? null
+                                  : (_isRecording
+                                      ? _stopRecording
+                                      : _startRecording),
+                          child: Text(
+                            _isRecording ? 'Stop Capture' : 'Start Capture',
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: _isReplaying ? null : _replayLatestSession,
+                          child: const Text('Replay Latest'),
+                        ),
+                        const SizedBox(width: 12),
+                        const Text(
+                          'Moving',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        Switch(
+                          value: _userIsMoving,
+                          onChanged:
+                              _isReplaying
+                                  ? null
+                                  : (value) {
+                                    setState(() {
+                                      _userIsMoving = value;
+                                    });
+                                  },
+                        ),
+                      ],
+                    ),
                     Text(
-                      _liveDetections
-                          .take(5)
-                          .map(
-                            (d) =>
-                                '${d.label} ${(d.confidence * 100).round()}%',
-                          )
-                          .join('  |  '),
-                      style: const TextStyle(color: Colors.amber, fontSize: 13),
+                      'status=$_statusText  savedFrames=$_persistedFrameCount',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                  ],
-                  const Divider(color: Colors.white24, height: 16),
-                  Expanded(
-                    child:
-                        _detectionLog.isEmpty
-                            ? const Text(
-                              'No detections yet',
-                              style: TextStyle(color: Colors.white38),
+                    const SizedBox(height: 4),
+                    Text(
+                      'risk=${_assessment.primaryHazard?.severity.name ?? 'none'}  motion=${_liveMotionObjects.length}',
+                      style: const TextStyle(
+                        color: Colors.lightBlueAccent,
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (_liveDetections.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        _liveDetections
+                            .take(5)
+                            .map(
+                              (d) =>
+                                  '${d.label} ${(d.confidence * 100).round()}%',
                             )
-                            : ListView.builder(
-                              itemCount: _detectionLog.length,
-                              itemBuilder: (context, index) {
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 4),
-                                  child: Text(
-                                    _detectionLog[index],
-                                    style: const TextStyle(
-                                      color: Colors.amber,
-                                      fontSize: 13,
-                                      fontFamily: 'monospace',
+                            .join('  |  '),
+                        style: const TextStyle(
+                          color: Colors.amber,
+                          fontSize: 13,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                    const Divider(color: Colors.white24, height: 16),
+                    Expanded(
+                      child:
+                          _detectionLog.isEmpty
+                              ? const Text(
+                                'No detections yet',
+                                style: TextStyle(color: Colors.white38),
+                              )
+                              : ListView.builder(
+                                itemCount: _detectionLog.length,
+                                itemBuilder: (context, index) {
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 4),
+                                    child: Text(
+                                      _detectionLog[index],
+                                      style: const TextStyle(
+                                        color: Colors.amber,
+                                        fontSize: 13,
+                                        fontFamily: 'monospace',
+                                      ),
                                     ),
-                                  ),
-                                );
-                              },
-                            ),
-                  ),
-                ],
+                                  );
+                                },
+                              ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

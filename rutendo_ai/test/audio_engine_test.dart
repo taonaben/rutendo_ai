@@ -27,9 +27,10 @@ void main() {
         right: right,
         bottom: 0.8,
       ),
-      zone: centerX < 0.33
-          ? DetectionZone.left
-          : (centerX > 0.66 ? DetectionZone.right : DetectionZone.center),
+      zone:
+          centerX < 0.33
+              ? DetectionZone.left
+              : (centerX > 0.66 ? DetectionZone.right : DetectionZone.center),
       distance: EstimatedDistance.medium,
       severity: severity,
       score: 80,
@@ -95,7 +96,10 @@ void main() {
     const assessment = RiskAssessment(
       hazards: [],
       audioCue: AudioCueDecision(pattern: AudioCuePattern.none, intervalMs: 0),
-      hapticCue: HapticCueDecision(pattern: HapticCuePattern.none, durationMs: 0),
+      hapticCue: HapticCueDecision(
+        pattern: HapticCuePattern.none,
+        durationMs: 0,
+      ),
     );
 
     expect(mapper.fromAssessment(assessment), isNull);
