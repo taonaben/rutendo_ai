@@ -1,0 +1,71 @@
+graph TB
+    subgraph User["User"]
+        VI["Visually Impaired Pedestrian"]
+    end
+
+    subgraph Device["Android Device"]
+        subgraph App["Rutendo AI App (Flutter)"]
+            CAM["Camera Module<br/>640x480, 120ms interval"]
+
+            subgraph Preprocessing["Background Isolate"]
+                YUV["YUV to RGB Conversion"]
+                RESIZE["Resize to 640x640"]
+                NORM["Normalize NCHW<br/>Float32List(3x640x640)"]
+            end
+
+            subgraph Inference["TFLite GPU Delegate"]
+                TFLITE["TFLite Interpreter<br/>GpuDelegateV2 + XNNPack"]
+                MODEL["YOLO11n Model<br/>~10.7 MB, 11 COCO classes"]
+            end
+
+            subgraph Decoding["Output Decoding"]
+                DECODE["RawYoloDecoder<br/>Column-major 15x8400<br/>+ NMS"]
+            end
+
+            subgraph Tracking["Tracking Layer"]
+                TRACKER["SimpleTracker<br/>Cross-frame ID matching"]
+                MOTION["MotionEstimator<br/>Velocity & trajectory"]
+            end
+
+            subgraph RiskEngine["Risk Engine (Dart)"]
+                ZONE["Zone Classification<br/>Left / Center / Right"]
+                DIST["Distance Estimation<br/>Near / Medium / Far"]
+                SCORE["Priority Scoring<br/>Object type + zone + distance"]
+                SELECT["Top 1-2 Hazard Selection"]
+            end
+
+            subgraph Feedback["Feedback Layer"]
+                AUDIO["Audio Cues<br/>WAV: static_tick,<br/>dynamic_tick, critical_chirp"]
+                HAPTIC["Haptic Cues<br/>Vibration Patterns"]
+            end
+
+            UI["UI Overlay<br/>Bounding Boxes<br/>+ Perf HUD"]
+        end
+    end
+
+    VI -->|"Camera Stream"| CAM
+    CAM -->|"Raw YUV Frames"| Preprocessing
+    Preprocessing -->|"NCHW Tensor"| Inference
+    TFLITE --> MODEL
+    Inference -->|"Float32List(15x8400)"| Decoding
+    Decoding -->|"DetectionResult List"| Tracking
+    TRACKER --> MOTION
+    MOTION -->|"Tracked Objects"| RiskEngine
+    ZONE --> DIST --> SCORE --> SELECT
+    SELECT -->|"AudioCueDecision"| AUDIO
+    SELECT -->|"HapticCueDecision"| HAPTIC
+    SELECT -->|"Hazard List"| UI
+    AUDIO -->|"Directional Beeps<br/>(flutter_soloud)"| VI
+    HAPTIC -->|"Vibration Patterns"| VI
+    UI -->|"Visual Overlay + Timing"| VI
+
+    style VI fill:#e1f5fe,stroke:#01579b
+    style CAM fill:#fff3e0,stroke:#e65100
+    style Preprocessing fill:#f3e5f5,stroke:#7b1fa2
+    style Inference fill:#e8f5e9,stroke:#1b5e20
+    style Decoding fill:#fce4ec,stroke:#c62828
+    style Tracking fill:#fff8e1,stroke:#f9a825
+    style RiskEngine fill:#fff8e1,stroke:#f9a825
+    style Feedback fill:#e0f2f1,stroke:#004d40
+    style UI fill:#f5f5f5,stroke:#424242
+    style MODEL fill:#c8e6c9,stroke:#2e7d32
