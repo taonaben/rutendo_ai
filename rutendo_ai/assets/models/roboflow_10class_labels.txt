@@ -1,0 +1,10 @@
+animal
+barrier
+bike
+crosswalk
+hazard-sign
+person
+pole
+stairs
+stall
+vehicle
